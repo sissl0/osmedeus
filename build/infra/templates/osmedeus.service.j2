@@ -1,0 +1,21 @@
+[Unit]
+Description=Osmedeus Security Automation Server
+After=network.target
+
+[Service]
+Type=simple
+User={{ osm_user }}
+Group={{ osm_user }}
+ExecStart={{ osm_install_dir }}/osmedeus server --port {{ osm_server_port }}
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths={{ osm_base_dir }} {{ osm_workspaces_dir }}
+
+[Install]
+WantedBy=multi-user.target

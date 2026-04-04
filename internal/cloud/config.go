@@ -3,6 +3,7 @@ package cloud
 import (
 	"fmt"
 	"os"
+	"strings"
 	"path/filepath"
 
 	"github.com/j3ssie/osmedeus/v5/internal/config"
@@ -98,9 +99,13 @@ func resolveEnvVars(cfg *config.CloudConfigs) error {
 	cfg.Providers.Azure.ClientSecret = os.ExpandEnv(cfg.Providers.Azure.ClientSecret)
 	cfg.Providers.Azure.Location = os.ExpandEnv(cfg.Providers.Azure.Location)
 
+	// Hetzner
+	cfg.Providers.Hetzner.Token = os.ExpandEnv(cfg.Providers.Hetzner.Token)
+
 	// SSH
 	cfg.SSH.PrivateKeyPath = os.ExpandEnv(cfg.SSH.PrivateKeyPath)
 	cfg.SSH.PrivateKeyContent = os.ExpandEnv(cfg.SSH.PrivateKeyContent)
+	cfg.SSH.Password = os.ExpandEnv(cfg.SSH.Password)
 
 	// State
 	cfg.State.Path = os.ExpandEnv(cfg.State.Path)
@@ -132,6 +137,10 @@ func ValidateCloudConfig(cfg *config.CloudConfigs) error {
 		if cfg.Providers.Azure.SubscriptionID == "" || cfg.Providers.Azure.ClientID == "" {
 			return fmt.Errorf("azure credentials not configured")
 		}
+	case "hetzner":
+		if cfg.Providers.Hetzner.Token == "" {
+			return fmt.Errorf("hetzner token not configured")
+		}
 	default:
 		return fmt.Errorf("invalid provider: %s", cfg.Defaults.Provider)
 	}
@@ -153,4 +162,12 @@ func ValidateCloudConfig(cfg *config.CloudConfigs) error {
 	}
 
 	return nil
+}
+
+// ResolveTemplatePaths expands {{base_folder}} in path fields of the cloud config.
+// Call this after LoadCloudConfig with the actual base folder path.
+func ResolveTemplatePaths(cfg *config.CloudConfigs, baseFolder string) {
+	cfg.State.Path = strings.ReplaceAll(cfg.State.Path, "{{base_folder}}", baseFolder)
+	cfg.Setup.Ansible.PlaybookPath = strings.ReplaceAll(cfg.Setup.Ansible.PlaybookPath, "{{base_folder}}", baseFolder)
+	cfg.Setup.Ansible.InventoryPath = strings.ReplaceAll(cfg.Setup.Ansible.InventoryPath, "{{base_folder}}", baseFolder)
 }

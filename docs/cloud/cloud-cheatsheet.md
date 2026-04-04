@@ -1,221 +1,161 @@
-# Osmedeus Cloud Cheatsheet
+# Cloud Cheatsheet
 
+## First-Time Setup
+
+```bash
+# 0. Enable cloud feature
+osmedeus config set cloud.enabled true
+
+# 1. Credentials (pick one provider)
+osmedeus cloud config set providers.aws.access_key_id <key>
+osmedeus cloud config set providers.aws.secret_access_key <secret>
+osmedeus cloud config set providers.aws.region ap-southeast-1
+osmedeus cloud config set defaults.provider aws
+
+# 2. SSH
+osmedeus cloud config set ssh.private_key_path ~/.ssh/id_rsa
+osmedeus cloud config set ssh.public_key_path ~/.ssh/id_rsa.pub
+
+# 3. Clean the setup scripts first, then add worker setup
+osmedeus cloud config set setup.commands.clear ""
+osmedeus cloud config set setup.commands.add "curl -fsSL https://www.osmedeus.org/install.sh | bash"
+osmedeus cloud config set setup.commands.add "osmedeus install base --preset"
+
+# 4. Cost limits (recommended)
+osmedeus cloud config set limits.max_hourly_spend 1.00
+osmedeus cloud config set limits.max_total_spend 10.00
 ```
-╔════════════════════════════════════════════════════════════════════════════╗
-║                     OSMEDEUS CLOUD CHEATSHEET                              ║
-║                    Distributed Security Scanning                           ║
-╚════════════════════════════════════════════════════════════════════════════╝
 
-┌─ QUICK START ──────────────────────────────────────────────────────────────┐
-│                                                                             │
-│  # Configure                                                                │
-│  osmedeus cloud config set providers.digitalocean.token "YOUR_TOKEN"        │
-│  osmedeus cloud config set defaults.provider "digitalocean"                 │
-│                                                                             │
-│  # Run                                                                      │
-│  osmedeus cloud run -f general -t example.com --instances 3                 │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+## Workflow Mode
 
-┌─ CONFIGURATION ────────────────────────────────────────────────────────────┐
-│                                                                             │
-│  osmedeus cloud config show                      # View configuration       │
-│  osmedeus cloud config set <key> <value>         # Set value               │
-│                                                                             │
-│  # Provider Credentials                                                     │
-│  providers.digitalocean.token "dop_v1_..."                                  │
-│  providers.aws.access_key_id "AKIA..."                                      │
-│  providers.aws.secret_access_key "..."                                      │
-│  providers.gcp.project_id "my-project"                                      │
-│                                                                             │
-│  # Defaults                                                                 │
-│  defaults.provider "digitalocean|aws|gcp|linode|azure"                      │
-│  defaults.max_instances 10                                                  │
-│                                                                             │
-│  # Cost Limits                                                              │
-│  limits.max_hourly_spend 5.00                                               │
-│  limits.max_total_spend 50.00                                               │
-│                                                                             │
-│  # Instance Types                                                           │
-│  providers.digitalocean.size "s-2vcpu-4gb"                                  │
-│  providers.aws.instance_type "t3.medium"                                    │
-│  providers.gcp.machine_type "n1-standard-2"                                 │
-│                                                                             │
-│  # Cost Savings (70-80% off)                                                │
-│  providers.aws.use_spot true                                                │
-│  providers.gcp.use_preemptible true                                         │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+```bash
+osmedeus cloud run -f fast -t example.com                          # Single target
+osmedeus cloud run -f fast -T targets.txt --instances 5            # Distributed
+osmedeus cloud run -f fast -t example.com --sync-back              # Sync results
+osmedeus cloud run -f fast -t example.com --auto-destroy           # Auto cleanup
+osmedeus cloud run -f fast -t example.com --sync-back --auto-destroy  # Full lifecycle
+osmedeus cloud run -f fast -t example.com --reuse                  # Reuse infra
+osmedeus cloud run -m enum-subdomain -t example.com --timeout 30m  # Module + timeout
+```
 
-┌─ INFRASTRUCTURE MANAGEMENT ────────────────────────────────────────────────┐
-│                                                                             │
-│  osmedeus cloud create --instances 5              # Create                 │
-│  osmedeus cloud create --provider aws --instances 10                        │
-│  osmedeus cloud create --instances 3 --force                                │
-│                                                                             │
-│  osmedeus cloud list                              # List                   │
-│                                                                             │
-│  osmedeus cloud destroy <id>                      # Destroy                │
-│  osmedeus cloud destroy --all                                               │
-│  osmedeus cloud destroy <id> --force                                        │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+## Custom Command Mode
 
-┌─ RUNNING WORKFLOWS ────────────────────────────────────────────────────────┐
-│                                                                             │
-│  # Single target                                                            │
-│  osmedeus cloud run -f general -t example.com --instances 3                 │
-│  osmedeus cloud run -m subdomain-enum -t example.com --instances 5          │
-│                                                                             │
-│  # Multiple targets                                                         │
-│  osmedeus cloud run -f general -T targets.txt --instances 10                │
-│  osmedeus cloud run -f general -T targets.txt -c 10 --instances 5           │
-│                                                                             │
-│  # With provider                                                            │
-│  osmedeus cloud run -f general -t example.com --provider aws --instances 5  │
-│                                                                             │
-│  # With timeout                                                             │
-│  osmedeus cloud run -f general -t example.com --instances 3 --timeout 2h    │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+```bash
+# Run anything on cloud instances
+osmedeus cloud run --custom-cmd "nmap -sV {{Target}}" -t example.com
 
-┌─ COST ESTIMATES ───────────────────────────────────────────────────────────┐
-│                                                                             │
-│  ╔══════════════════╦═════════════╦══════════════╦═══════════════════════╗ │
-│  ║ Provider         ║ Type        ║ Hourly       ║ Daily                 ║ │
-│  ╠══════════════════╬═════════════╬══════════════╬═══════════════════════╣ │
-│  ║ DigitalOcean     ║ s-1vcpu-1gb ║ $0.00744/hr  ║ $0.18/day             ║ │
-│  ║ DigitalOcean ⭐   ║ s-2vcpu-4gb ║ $0.02232/hr  ║ $0.54/day             ║ │
-│  ║ DigitalOcean     ║ s-4vcpu-8gb ║ $0.04464/hr  ║ $1.07/day             ║ │
-│  ║ AWS              ║ t3.micro    ║ $0.0104/hr   ║ $0.25/day             ║ │
-│  ║ AWS ⭐            ║ t3.medium   ║ $0.0416/hr   ║ $1.00/day             ║ │
-│  ║ AWS (spot)       ║ t3.medium   ║ ~$0.0125/hr  ║ ~$0.30/day (-70%)     ║ │
-│  ║ GCP              ║ n1-std-1    ║ $0.0475/hr   ║ $1.14/day             ║ │
-│  ║ GCP ⭐            ║ n1-std-2    ║ $0.0950/hr   ║ $2.28/day             ║ │
-│  ║ GCP (preempt)    ║ n1-std-2    ║ ~$0.0190/hr  ║ ~$0.46/day (-80%)     ║ │
-│  ╚══════════════════╩═════════════╩══════════════╩═══════════════════════╝ │
-│                                                                             │
-│  Formula: Total = (Hourly Rate × Instances × Hours)                        │
-│  Example: 5 × s-2vcpu-4gb × 2h = 5 × $0.02232 × 2 = $0.22                  │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+# Pipeline: multiple commands, sync results
+osmedeus cloud run \
+  --custom-cmd "subfinder -d {{Target}} -o /tmp/osm-custom/subs.txt" \
+  --custom-cmd "cat /tmp/osm-custom/subs.txt | httpx -o /tmp/osm-custom/live.txt" \
+  --custom-post-cmd "wc -l /tmp/osm-custom/live.txt" \
+  --sync-path "/tmp/osm-custom/" \
+  -t example.com --auto-destroy
 
-┌─ COMMON WORKFLOWS ─────────────────────────────────────────────────────────┐
-│                                                                             │
-│  # Bug Bounty Recon                                                         │
-│  osmedeus cloud run -m subdomain-enum -T targets.txt --instances 10 \       │
-│    --timeout 2h                                                             │
-│                                                                             │
-│  # Repository Audit (100 repos)                                             │
-│  osmedeus cloud run -f repo -T repos.txt -c 20 --instances 20 --timeout 6h  │
-│                                                                             │
-│  # IP Range Scanning                                                        │
-│  osmedeus cloud run -f ip-scanning -T cidr.txt --instances 15 --timeout 4h  │
-│                                                                             │
-│  # Large Campaign (Persistent)                                              │
-│  osmedeus cloud create --instances 20                                       │
-│  osmedeus run -f general -T batch-1.txt -c 10                               │
-│  osmedeus run -f general -T batch-2.txt -c 10                               │
-│  osmedeus cloud destroy --all                                               │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+# Distribute targets, sync to custom dir
+osmedeus cloud run \
+  --custom-cmd "cat {{Target}} | nuclei -o /tmp/osm-custom/nuclei.txt" \
+  --sync-path "/tmp/osm-custom/nuclei.txt" \
+  --sync-dest "./nuclei-results" \
+  -T targets.txt --instances 5
+```
 
-┌─ PROVIDER REGIONS ─────────────────────────────────────────────────────────┐
-│                                                                             │
-│  DigitalOcean: nyc1, nyc3, sfo1, sfo3, ams3, sgp1, lon1, fra1, tor1, blr1  │
-│  AWS:          us-east-1, us-west-2, eu-west-1, ap-southeast-1             │
-│  GCP:          us-central1, us-east1, europe-west1, asia-southeast1        │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+### Variables: `{{Target}}` `{{public_ip}}` `{{private_ip}}` `{{worker_name}}` `{{worker_id}}` `{{infra_id}}` `{{provider}}` `{{ssh_user}}` `{{index}}`
 
-┌─ ENVIRONMENT VARIABLES ────────────────────────────────────────────────────┐
-│                                                                             │
-│  export DIGITALOCEAN_TOKEN="dop_v1_..."                                     │
-│  export AWS_ACCESS_KEY_ID="AKIA..."                                         │
-│  export AWS_SECRET_ACCESS_KEY="..."                                         │
-│  export GCP_PROJECT_ID="my-project"                                         │
-│                                                                             │
-│  # Reference in config                                                      │
-│  osmedeus cloud config set providers.digitalocean.token \                   │
-│    '${DIGITALOCEAN_TOKEN}'                                                  │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+### Rules
+- Commands run in `/tmp/osm-custom/` on remote
+- Sequential per worker, parallel across workers
+- First failure skips remaining cmds + post-cmds
+- Sync destination: `<sync-dest>/<worker_name>-<ip>/<path>`
 
-┌─ TROUBLESHOOTING ──────────────────────────────────────────────────────────┐
-│                                                                             │
-│  osmedeus --debug cloud run ...              # Debug mode                  │
-│  tail -f ~/osmedeus-base/logs/osmedeus-*.log # View logs                   │
-│  osmedeus cloud list                         # List infrastructure         │
-│  osmedeus cloud destroy --all --force        # Emergency cleanup           │
-│                                                                             │
-│  # Check states                                                             │
-│  ls -la ~/osmedeus-base/cloud-state/infrastructure/                         │
-│                                                                             │
-│  # Manual cleanup                                                           │
-│  doctl compute droplet list | grep osmedeus                                 │
-│  aws ec2 describe-instances --filters "Name=tag:osmedeus,Values=*"          │
-│  gcloud compute instances list | grep osmedeus                              │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+## Infrastructure
 
-┌─ BEST PRACTICES ───────────────────────────────────────────────────────────┐
-│                                                                             │
-│  ✓ Always set cost limits (max_hourly_spend, max_total_spend)              │
-│  ✓ Use spot/preemptible instances for 70-80% cost savings                  │
-│  ✓ Start small (1-2 instances) then scale up                               │
-│  ✓ Clean up infrastructure after use (cloud destroy --all)                 │
-│  ✓ Use custom snapshots for faster boot (30s vs 5min)                      │
-│  ✓ Monitor real-time cost during execution                                 │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+```bash
+osmedeus cloud create --provider aws -n 3     # Create
+osmedeus cloud list                           # List
+osmedeus cloud destroy <id>                   # Destroy one
+osmedeus cloud destroy all --force            # Destroy all
+osmedeus cloud setup --reuse-with "1.2.3.4"   # Setup existing
+```
 
-┌─ ADVANCED FEATURES ────────────────────────────────────────────────────────┐
-│                                                                             │
-│  # Custom Snapshots (Fast Boot)                                             │
-│  osmedeus cloud config set providers.digitalocean.snapshot_id "123456789"   │
-│                                                                             │
-│  # Custom Worker Setup                                                      │
-│  osmedeus cloud config set setup.commands[0] "apt-get update"               │
-│  osmedeus cloud config set setup.commands[1] "pip3 install custom-tool"     │
-│                                                                             │
-│  # SSH Configuration                                                        │
-│  osmedeus cloud config set ssh.private_key_path "~/.ssh/cloud_rsa"          │
-│  osmedeus cloud config set ssh.user "root"                                  │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+## Config
 
-┌─ FLAGS REFERENCE ──────────────────────────────────────────────────────────┐
-│                                                                             │
-│  --provider <name>        Cloud provider (digitalocean|aws|gcp|linode...)  │
-│  --mode <mode>            Execution mode (vm|serverless)                   │
-│  --instances <n>          Number of instances to provision                 │
-│  --timeout <duration>     Timeout for cloud run (e.g., 2h, 30m)            │
-│  --force                  Skip confirmation prompts                        │
-│  -c <n>                   Concurrent target scanning                       │
-│  -f <flow>                Flow name (general, repo, etc.)                  │
-│  -m <module>              Module name (subdomain-enum, etc.)               │
-│  -t <target>              Single target                                    │
-│  -T <file>                Multiple targets from file                       │
-│  --debug                  Enable debug output                              │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+```bash
+osmedeus cloud config list                    # View
+osmedeus cloud config set <key> <value>       # Set
+osmedeus cloud config set <key>.add <value>   # Append to list
+osmedeus cloud config clean                   # Reset
+```
 
-┌─ HELP & DOCUMENTATION ─────────────────────────────────────────────────────┐
-│                                                                             │
-│  osmedeus cloud --help                   # Cloud help                      │
-│  osmedeus --usage-example                # Full examples                   │
-│                                                                             │
-│  Documentation:                                                             │
-│  • docs/cloud-usage-examples.md          # Detailed examples               │
-│  • docs/cloud-quick-reference.md         # Quick reference                 │
-│  • docs/cloud-usage-guide.md             # Architecture guide              │
-│  • test/e2e/CLOUD_TESTS_README.md        # Test documentation              │
-│                                                                             │
-│  GitHub: https://github.com/j3ssie/osmedeus/issues                          │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
+## Provider Quick Config
 
-╔════════════════════════════════════════════════════════════════════════════╗
-║  Version: v5.0+ | License: MIT | Author: @j3ssie                           ║
-╚════════════════════════════════════════════════════════════════════════════╝
+**AWS:**
+```bash
+osmedeus cloud config set providers.aws.access_key_id ${AWS_ACCESS_KEY_ID}
+osmedeus cloud config set providers.aws.secret_access_key ${AWS_SECRET_ACCESS_KEY}
+osmedeus cloud config set providers.aws.region ap-southeast-1
+osmedeus cloud config set providers.aws.instance_type t3.medium
+osmedeus cloud config set providers.aws.use_spot true          # 70% cheaper
+```
+
+**Hetzner:**
+```bash
+osmedeus cloud config set providers.hetzner.token ${HETZNER_API_TOKEN}
+osmedeus cloud config set providers.hetzner.location fsn1
+osmedeus cloud config set providers.hetzner.server_type cx22
+```
+
+**DigitalOcean:**
+```bash
+osmedeus cloud config set providers.digitalocean.token ${DO_TOKEN}
+osmedeus cloud config set providers.digitalocean.region sgp1
+osmedeus cloud config set providers.digitalocean.size s-2vcpu-4gb
+```
+
+**GCP:**
+```bash
+osmedeus cloud config set providers.gcp.project_id ${GCP_PROJECT}
+osmedeus cloud config set providers.gcp.credentials_file /path/to/sa-key.json
+osmedeus cloud config set providers.gcp.region us-central1
+osmedeus cloud config set providers.gcp.zone us-central1-a
+osmedeus cloud config set providers.gcp.machine_type n1-standard-2
+```
+
+**Linode:**
+```bash
+osmedeus cloud config set providers.linode.token ${LINODE_TOKEN}
+osmedeus cloud config set providers.linode.region ap-south
+osmedeus cloud config set providers.linode.type g6-standard-2
+```
+
+**Azure:**
+```bash
+osmedeus cloud config set providers.azure.subscription_id ${AZURE_SUB_ID}
+osmedeus cloud config set providers.azure.tenant_id ${AZURE_TENANT_ID}
+osmedeus cloud config set providers.azure.client_id ${AZURE_CLIENT_ID}
+osmedeus cloud config set providers.azure.client_secret ${AZURE_CLIENT_SECRET}
+osmedeus cloud config set providers.azure.location southeastasia
+osmedeus cloud config set providers.azure.vm_size Standard_B2s
+```
+
+## Cost Reference
+
+| Provider | Instance | vCPU | RAM | $/hr |
+|----------|----------|------|-----|------|
+| Hetzner | cx22 | 2 | 4 GB | 0.007 |
+| Linode | g6-standard-2 | 2 | 4 GB | 0.018 |
+| DigitalOcean | s-2vcpu-4gb | 2 | 4 GB | 0.022 |
+| AWS | t3.medium | 2 | 4 GB | 0.042 |
+| Azure | Standard_B2s | 2 | 4 GB | 0.042 |
+| GCP | n1-standard-2 | 2 | 7.5 GB | 0.095 |
+
+5 x Hetzner cx22 x 2 hours = **$0.07** | 5 x DO s-2vcpu-4gb x 2 hours = **$0.22**
+
+## Troubleshooting
+
+```bash
+osmedeus cloud run -f fast -t example.com --verbose-setup   # See setup output
+osmedeus cloud run -f fast -t example.com --debug            # Full debug logs
+osmedeus cloud list                                          # Check for orphans
+osmedeus cloud destroy all --force                           # Emergency cleanup
 ```

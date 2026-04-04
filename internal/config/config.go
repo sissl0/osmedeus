@@ -852,6 +852,10 @@ func (c *Config) ResolvePaths() {
 
 	// Resolve external scripts path
 	c.ExternalScriptsPath = c.resolvePath(c.Environments.ExternalScripts, baseFolder)
+
+	// Resolve cloud paths
+	c.Cloud.CloudPath = c.resolvePath(c.Cloud.CloudPath, baseFolder)
+	c.Cloud.CloudSettings = c.resolvePath(c.Cloud.CloudSettings, baseFolder)
 }
 
 // resolvePath resolves a single path with variable substitution
@@ -1235,6 +1239,10 @@ func DefaultConfig() *Config {
 			StructuredJSONFormat: false,
 			SystemPrompt:         "",
 			CustomHeaders:        "",
+		},
+		Cloud: CloudConfig{
+			CloudPath:     "{{base_folder}}/cloud",
+			CloudSettings: "{{base_folder}}/cloud/cloud-settings.yaml",
 		},
 	}
 }

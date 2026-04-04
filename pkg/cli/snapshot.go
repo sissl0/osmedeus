@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -189,7 +190,20 @@ func runSnapshotList(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(snapshots) == 0 {
+		if globalJSON {
+			fmt.Println("[]")
+			return nil
+		}
 		printer.Info("No snapshots found in: %s", cfg.SnapshotPath)
+		return nil
+	}
+
+	if globalJSON {
+		jsonBytes, err := json.MarshalIndent(snapshots, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal snapshots: %w", err)
+		}
+		fmt.Println(string(jsonBytes))
 		return nil
 	}
 

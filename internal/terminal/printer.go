@@ -261,6 +261,23 @@ func (p *Printer) WorkflowInfo(name, description string, tags []string, runnerTy
 	_, _ = fmt.Fprintf(os.Stdout, "  %s %s\n\n", Gray("Tip:"), Cyan("osmedeus workflow view "+name))
 }
 
+// DisabledTogglesTip prints a tip about disabled toggle params that could generate more results.
+// disabledToggles is a map of param name to description for each disabled toggle.
+func (p *Printer) DisabledTogglesTip(disabledToggles map[string]string) {
+	if IsCIMode() || len(disabledToggles) == 0 {
+		return
+	}
+
+	_, _ = fmt.Fprintf(os.Stdout, "  %s %s\n", Yellow(SymbolLightning), Bold("Some scan options are disabled by default:"))
+	var paramNames []string
+	for name, desc := range disabledToggles {
+		_, _ = fmt.Fprintf(os.Stdout, "     %s %s — %s\n", Gray("•"), Green(name), Gray(desc))
+		paramNames = append(paramNames, fmt.Sprintf("-p %s=true", name))
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "     %s %s\n", Gray("Enable with:"), Cyan(strings.Join(paramNames, " ")))
+	_, _ = fmt.Fprintf(os.Stdout, "     %s\n\n", Gray("These generate more results but slow down the scan significantly."))
+}
+
 // Section prints a section header with symbol
 func (p *Printer) Section(title string) {
 	if IsCIMode() {

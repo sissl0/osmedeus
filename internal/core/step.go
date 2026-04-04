@@ -268,6 +268,9 @@ type Step struct {
 	AllowedPaths []string       `yaml:"allowed_paths,omitempty"` // Paths the agent is allowed to read
 	ACPConfig    *ACPStepConfig `yaml:"acp_config,omitempty"`    // ACP-specific configuration
 
+	// Agent-SDK step fields (uses go-agent-agnostic library)
+	SDKConfig *SDKStepConfig `yaml:"sdk_config,omitempty"` // SDK-specific configuration
+
 	// Streaming (applies to both llm and agent steps)
 	Stream *bool `yaml:"stream,omitempty"` // Enable streaming output (overrides llm_config.stream and global config)
 
@@ -360,6 +363,18 @@ type ACPStepConfig struct {
 	WriteEnabled bool              `yaml:"write_enabled,omitempty"` // Allow the agent to write files (default: false)
 }
 
+// SDKStepConfig holds configuration specific to agent-sdk steps
+type SDKStepConfig struct {
+	Model          string            `yaml:"model,omitempty"`           // Model name (agent-specific, e.g., "sonnet", "o3")
+	Env            map[string]string `yaml:"env,omitempty"`             // Environment variables for the agent process
+	MaxTurns       int               `yaml:"max_turns,omitempty"`       // Max agentic turns (claude-code only, 0 = default)
+	PermissionMode string            `yaml:"permission_mode,omitempty"` // Permission mode (claude-code only, e.g., "bypassPermissions")
+	Sandbox        string            `yaml:"sandbox,omitempty"`         // Sandbox mode (codex only, e.g., "danger-full-access")
+	Strategy       string            `yaml:"strategy,omitempty"`        // Multi-agent strategy: "first" or "all" (requires agents list)
+	Agents         []string          `yaml:"agents,omitempty"`          // Multiple agents for multi-agent strategies
+	SessionResume  string            `yaml:"session_resume,omitempty"`  // Resume a previous session by ID (claude-code only)
+}
+
 // IsBashStep returns true if this is a bash step
 func (s *Step) IsBashStep() bool {
 	return s.Type == StepTypeBash
@@ -403,6 +418,11 @@ func (s *Step) IsAgentStep() bool {
 // IsAgentACPStep returns true if this is an agent-acp step
 func (s *Step) IsAgentACPStep() bool {
 	return s.Type == StepTypeAgentACP
+}
+
+// IsAgentSDKStep returns true if this is an agent-sdk step
+func (s *Step) IsAgentSDKStep() bool {
+	return s.Type == StepTypeAgentSDK
 }
 
 // GetStepRunner returns the step runner type, defaulting to host/local
@@ -572,6 +592,22 @@ func (s *Step) Clone() *Step {
 			}
 		}
 		cloned.ACPConfig = &cfg
+	}
+
+	// Deep copy Agent-SDK fields
+	if s.SDKConfig != nil {
+		cfg := *s.SDKConfig
+		if len(s.SDKConfig.Env) > 0 {
+			cfg.Env = make(map[string]string, len(s.SDKConfig.Env))
+			for k, v := range s.SDKConfig.Env {
+				cfg.Env[k] = v
+			}
+		}
+		if len(s.SDKConfig.Agents) > 0 {
+			cfg.Agents = make([]string, len(s.SDKConfig.Agents))
+			copy(cfg.Agents, s.SDKConfig.Agents)
+		}
+		cloned.SDKConfig = &cfg
 	}
 
 	// Deep copy SubAgents

@@ -1,0 +1,27 @@
+kind: module
+name: test-agent-sdk
+description: Test agent-sdk step with go-agent-agnostic library
+tags: test,agent-sdk
+
+params:
+  - name: target
+    required: true
+    default: example.com
+
+steps:
+  # Basic agent-sdk step with built-in agent
+  - name: sdk-basic
+    type: agent-sdk
+    log: "Running SDK agent for {{Target}}"
+    agent: claude-code
+    messages:
+      - role: user
+        content: "List the files in the current directory and summarize the results."
+    exports:
+      sdk_result: "{{sdk_output}}"
+
+  # Use SDK output in a subsequent bash step
+  - name: use-sdk-output
+    type: bash
+    log: "Using SDK agent output"
+    command: echo "Agent said - {{sdk_result}}"

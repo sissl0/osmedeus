@@ -1,0 +1,22 @@
+kind: module
+name: test-agent-sdk-codex
+description: Test agent-sdk step with codex agent
+tags: test,agent-sdk,codex
+
+params:
+  - name: target
+    required: true
+    default: example.com
+
+steps:
+  - name: sdk-codex
+    type: agent-sdk
+    log: "Running Codex SDK agent for {{Target}}"
+    agent: codex
+    sdk_config:
+      sandbox: "danger-full-access"
+    messages:
+      - role: user
+        content: "Explain what {{Target}} is."
+    exports:
+      result: "{{sdk_output}}"

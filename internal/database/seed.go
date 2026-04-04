@@ -3984,7 +3984,7 @@ type RunResult struct {
 }
 
 // ListRuns returns paginated runs with optional filters
-func ListRuns(ctx context.Context, offset, limit int, status, workflow, target, workspace string) (*RunResult, error) {
+func ListRuns(ctx context.Context, offset, limit int, status, workflow, target, workspace, runMode string) (*RunResult, error) {
 	if db == nil {
 		return nil, fmt.Errorf("database not connected")
 	}
@@ -4008,6 +4008,9 @@ func ListRuns(ctx context.Context, offset, limit int, status, workflow, target, 
 	if workspace != "" {
 		query = query.Where("workspace = ?", workspace)
 	}
+	if runMode != "" {
+		query = query.Where("run_mode = ?", runMode)
+	}
 
 	totalCount, err := query.Count(ctx)
 	if err != nil {
@@ -4030,6 +4033,9 @@ func ListRuns(ctx context.Context, offset, limit int, status, workflow, target, 
 			}
 			if workspace != "" {
 				q = q.Where("workspace = ?", workspace)
+			}
+			if runMode != "" {
+				q = q.Where("run_mode = ?", runMode)
 			}
 			return q
 		}).

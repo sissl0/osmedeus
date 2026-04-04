@@ -65,9 +65,9 @@ func TestRun_MultiTypeVariable_RejectsIP(t *testing.T) {
 	log.Step("Testing dependencies.variables with type: domain,url rejects IP")
 
 	workflowPath := getTestdataPath(t)
-	stdout, _, err := runCLIWithLog(t, log, "run", "-m", "test-multi-type-variable", "-t", "192.168.1.1", "--dry-run", "-F", workflowPath)
+	_, stderr, err := runCLIWithLog(t, log, "run", "-m", "test-multi-type-variable", "-t", "192.168.1.1", "--dry-run", "-F", workflowPath)
 	assert.Error(t, err)
-	assert.Contains(t, stdout, "Target type mismatch")
+	assert.Contains(t, stderr, "Target type mismatch")
 }
 
 func TestRun_MultiTypeVariable_RejectsString(t *testing.T) {
@@ -75,7 +75,7 @@ func TestRun_MultiTypeVariable_RejectsString(t *testing.T) {
 	log.Step("Testing dependencies.variables with type: domain,url rejects plain string")
 
 	workflowPath := getTestdataPath(t)
-	stdout, _, err := runCLIWithLog(t, log, "run", "-m", "test-multi-type-variable", "-t", "not-a-domain-or-url", "--dry-run", "-F", workflowPath)
+	_, stderr, err := runCLIWithLog(t, log, "run", "-m", "test-multi-type-variable", "-t", "not-a-domain-or-url", "--dry-run", "-F", workflowPath)
 	assert.Error(t, err)
-	assert.Contains(t, stdout, "Target type mismatch")
+	assert.Contains(t, stderr, "Target type mismatch")
 }

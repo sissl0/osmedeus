@@ -12,7 +12,7 @@ var (
 )
 
 // @title Osmedeus API
-// @version 5.0.1
+// @version 5.0.2
 // @description Workflow Engine for Offensive Security - REST API for managing security automation workflows, scans, and distributed task execution.
 // @termsOfService https://docs.osmedeus.org/terms/
 

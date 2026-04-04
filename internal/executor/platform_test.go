@@ -26,7 +26,7 @@ func TestDetectKubernetes(t *testing.T) {
 func TestDetectCloudProvider(t *testing.T) {
 	result := DetectCloudProvider()
 	t.Logf("DetectCloudProvider() = %s", result)
-	// On a local machine, this should be "local"
+	// On a local machine, this should be "on-prem"
 	// This is primarily a smoke test - we just verify it doesn't panic
 }
 
@@ -137,7 +137,7 @@ func TestPlatformVariablesTemplateRendering(t *testing.T) {
 		{"echo {{PlatformArch}}", "echo " + runtime.GOARCH},
 		{"echo {{PlatformInDocker}}", "echo false"},
 		{"echo {{PlatformInKubernetes}}", "echo false"},
-		{"echo {{PlatformCloudProvider}}", "echo local"},
+		{"echo {{PlatformCloudProvider}}", "echo " + DetectCloudProvider()},
 	}
 
 	for _, tt := range tests {

@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,6 +18,35 @@ import (
 	"github.com/j3ssie/osmedeus/v5/internal/terminal"
 	"github.com/spf13/cobra"
 )
+
+// normalizeConfigSetArgs handles "key = value" syntax by stripping the "=" token.
+// Accepts: ["key", "value"], ["key", "=", "value"], ["key=", "value"], ["key", "=value"].
+func normalizeConfigSetArgs(args []string) (string, string, error) {
+	// Filter out standalone "=" tokens and trim "=" from edges
+	var cleaned []string
+	for _, a := range args {
+		a = strings.TrimSpace(a)
+		if a == "=" || a == "" {
+			continue
+		}
+		a = strings.TrimPrefix(a, "=")
+		a = strings.TrimSuffix(a, "=")
+		if a != "" {
+			cleaned = append(cleaned, a)
+		}
+	}
+	if len(cleaned) < 1 {
+		return "", "", fmt.Errorf("requires a key and value, e.g.: config set <key> <value>")
+	}
+	// Keys ending in .clear don't require a value (they clear a list)
+	if len(cleaned) < 2 {
+		if strings.HasSuffix(cleaned[0], ".clear") {
+			return cleaned[0], "", nil
+		}
+		return "", "", fmt.Errorf("requires a key and value, e.g.: config set <key> <value>")
+	}
+	return cleaned[0], strings.Join(cleaned[1:], " "), nil
+}
 
 // configCmd - parent command for config management
 var configCmd = &cobra.Command{
@@ -33,10 +65,9 @@ var configCleanCmd = &cobra.Command{
 
 // configSetCmd - set a config value
 var configSetCmd = &cobra.Command{
-	Use:   "set <key> <value>",
+	Use:   "set [<key> <value>]",
 	Short: "Set a configuration value",
 	Long:  UsageConfigSet(),
-	Args:  cobra.ExactArgs(2),
 	RunE:  runConfigSet,
 }
 
@@ -44,6 +75,8 @@ var (
 	configViewRedact      bool
 	configViewForce       bool
 	configListShowSecrets bool
+	configSetFromFile     string
+	configCleanWS         bool
 )
 
 var configViewCmd = &cobra.Command{
@@ -59,14 +92,16 @@ var configListCmd = &cobra.Command{
 	Aliases: []string{"ls"},
 	Short:   "List configuration values",
 	Long:    UsageConfigList(),
-	Args:    cobra.NoArgs,
+	Args:    cobra.MaximumNArgs(1),
 	RunE:    runConfigList,
 }
 
 func init() {
 	configCmd.AddCommand(configCleanCmd)
+	configCleanCmd.Flags().BoolVar(&configCleanWS, "clean-ws", false, "also remove workspace data directory (e.g. ~/workspaces-osmedeus)")
 	configCmd.AddCommand(configSetCmd)
 	configSetCmd.Flags().SetInterspersed(false) // Allow negative numbers as positional args
+	configSetCmd.Flags().StringVar(&configSetFromFile, "from-file", "", "Read key-value pairs from a file (or use - for stdin)")
 	configCmd.AddCommand(configViewCmd)
 	configCmd.AddCommand(configListCmd)
 
@@ -100,15 +135,50 @@ func runConfigClean(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to write default config: %w", err)
 	}
 
+	// Clean up cloud config and state
+	cloudSettingsPath := filepath.Join(cfg.BaseFolder, "cloud", "cloud-settings.yaml")
+	if _, err := os.Stat(cloudSettingsPath); err == nil {
+		_ = os.Remove(cloudSettingsPath)
+		printer.Info("Removed cloud config: %s", cloudSettingsPath)
+	}
+
+	cloudStatePath := filepath.Join(cfg.BaseFolder, "cloud-state")
+	if _, err := os.Stat(cloudStatePath); err == nil {
+		_ = os.RemoveAll(cloudStatePath)
+		printer.Info("Removed cloud state: %s", cloudStatePath)
+	}
+
 	printer.Success("Configuration reset to defaults at %s", settingsPath)
+
+	// Clean workspace data directory if --clean-ws is set
+	if configCleanWS {
+		wsPath := cfg.GetWorkspacesDir()
+		if wsPath == "" {
+			printer.Warning("Workspaces path not configured, skipping workspace cleanup")
+		} else {
+			printer.Info("Removing workspace data: %s", wsPath)
+			if err := os.RemoveAll(wsPath); err != nil {
+				return fmt.Errorf("failed to remove workspaces directory: %w", err)
+			}
+			if err := os.MkdirAll(wsPath, 0755); err != nil {
+				return fmt.Errorf("failed to recreate workspaces directory: %w", err)
+			}
+			printer.Success("Workspace data cleaned: %s", wsPath)
+		}
+	}
+
 	return nil
 }
 
 // runConfigSet sets a configuration value using dot notation
 func runConfigSet(cmd *cobra.Command, args []string) error {
 	printer := terminal.NewPrinter()
-	key := args[0]
-	value := args[1]
+
+	// Determine key-value pairs from args, file, or stdin
+	pairs, err := resolveConfigSetPairs(args, configSetFromFile)
+	if err != nil {
+		return err
+	}
 
 	cfg := config.Get()
 	if cfg == nil {
@@ -128,30 +198,41 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 		currentAuthUsername = "osmedeus"
 	}
 
-	// Set the value using dot notation
-	if err := setConfigValue(freshCfg, key, value); err != nil {
-		return fmt.Errorf("failed to set %s: %w", key, err)
-	}
+	var setErrors []string
+	for _, pair := range pairs {
+		key, value := pair[0], pair[1]
 
-	effectiveKey := key
-	var writeErr error
-	switch key {
-	case "server.password":
-		effectiveKey = fmt.Sprintf("server.simple_user_map_key.%s", currentAuthUsername)
-		writeErr = updateSettingsYAMLScalarValue(settingsPath, effectiveKey, value)
-	case "server.username":
-		writeErr = updateSettingsYAMLMappingKey(settingsPath, []string{"server", "simple_user_map_key"}, currentAuthUsername, value)
-	default:
-		writeErr = updateSettingsYAMLScalarValue(settingsPath, effectiveKey, value)
-	}
-
-	if writeErr != nil {
-		if err := writeSettingsYAMLFromConfig(settingsPath, freshCfg); err != nil {
-			return fmt.Errorf("failed to write config: %w", writeErr)
+		// Set the value using dot notation
+		if err := setConfigValue(freshCfg, key, value); err != nil {
+			setErrors = append(setErrors, fmt.Sprintf("failed to set %s: %v", key, err))
+			continue
 		}
+
+		effectiveKey := key
+		var writeErr error
+		switch key {
+		case "server.password":
+			effectiveKey = fmt.Sprintf("server.simple_user_map_key.%s", currentAuthUsername)
+			writeErr = updateSettingsYAMLScalarValue(settingsPath, effectiveKey, value)
+		case "server.username":
+			writeErr = updateSettingsYAMLMappingKey(settingsPath, []string{"server", "simple_user_map_key"}, currentAuthUsername, value)
+		default:
+			writeErr = updateSettingsYAMLScalarValue(settingsPath, effectiveKey, value)
+		}
+
+		if writeErr != nil {
+			if err := writeSettingsYAMLFromConfig(settingsPath, freshCfg); err != nil {
+				setErrors = append(setErrors, fmt.Sprintf("failed to write %s: %v", key, writeErr))
+				continue
+			}
+		}
+
+		printer.Success("Set %s = %s", terminal.Cyan(key), terminal.Green(redactValueForDisplay(key, value, false)))
 	}
 
-	printer.Success("Set %s = %s", key, redactValueForDisplay(key, value, false))
+	if len(setErrors) > 0 {
+		return fmt.Errorf("errors setting config:\n  %s", strings.Join(setErrors, "\n  "))
+	}
 	return nil
 }
 
@@ -179,12 +260,25 @@ func runConfigView(cmd *cobra.Command, args []string) error {
 
 	if key == "server.username" {
 		username, _ := primaryServerAuthUser(fileCfg)
+		if globalJSON {
+			result := map[string]interface{}{"key": key, "value": username}
+			jsonBytes, _ := json.MarshalIndent(result, "", "  ")
+			fmt.Println(string(jsonBytes))
+			return nil
+		}
 		fmt.Println(username)
 		return nil
 	}
 	if key == "server.password" {
 		_, password := primaryServerAuthUser(fileCfg)
-		fmt.Println(redactValueForDisplay(key, password, !configViewRedact))
+		val := redactValueForDisplay(key, password, !configViewRedact)
+		if globalJSON {
+			result := map[string]interface{}{"key": key, "value": val}
+			jsonBytes, _ := json.MarshalIndent(result, "", "  ")
+			fmt.Println(string(jsonBytes))
+			return nil
+		}
+		fmt.Println(val)
 		return nil
 	}
 
@@ -204,6 +298,47 @@ func runConfigView(cmd *cobra.Command, args []string) error {
 	targetNode, err := findASTNodeByPath(file.Docs[0].Body, strings.Split(key, "."))
 	if err != nil {
 		return err
+	}
+
+	if globalJSON {
+		var value interface{}
+		if strNode, ok := targetNode.(*ast.StringNode); ok {
+			val := strNode.Value
+			if configViewRedact {
+				val = redactValueForDisplay(key, val, false)
+			}
+			value = val
+		} else if intNode, ok := targetNode.(*ast.IntegerNode); ok {
+			if v, err := strconv.ParseInt(intNode.String(), 10, 64); err == nil {
+				value = v
+			} else {
+				value = intNode.String()
+			}
+		} else if floatNode, ok := targetNode.(*ast.FloatNode); ok {
+			if v, err := strconv.ParseFloat(floatNode.String(), 64); err == nil {
+				value = v
+			} else {
+				value = floatNode.String()
+			}
+		} else if boolNode, ok := targetNode.(*ast.BoolNode); ok {
+			value = boolNode.Value
+		} else {
+			output := targetNode.String()
+			if configViewRedact {
+				output = redactSensitiveFieldsYAML(output)
+			}
+			value = output
+		}
+		result := map[string]interface{}{
+			"key":   key,
+			"value": value,
+		}
+		jsonBytes, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal config value: %w", err)
+		}
+		fmt.Println(string(jsonBytes))
+		return nil
 	}
 
 	// Check if it's a scalar node
@@ -237,6 +372,12 @@ func runConfigList(cmd *cobra.Command, args []string) error {
 	cfg := config.Get()
 	if cfg == nil {
 		return fmt.Errorf("configuration not loaded")
+	}
+
+	// Optional fuzzy filter from first argument
+	var filter string
+	if len(args) > 0 {
+		filter = strings.ToLower(args[0])
 	}
 
 	settingsPath := filepath.Join(cfg.BaseFolder, "osm-settings.yaml")
@@ -275,12 +416,41 @@ func runConfigList(cmd *cobra.Command, args []string) error {
 	}
 	sortStrings(keys)
 
+	if globalJSON {
+		result := make(map[string]string)
+		for _, k := range keys {
+			if filter != "" && !strings.Contains(strings.ToLower(k), filter) {
+				continue
+			}
+			v := out[k]
+			if !configListShowSecrets {
+				v = redactValueForDisplay(k, v, false)
+			}
+			result[k] = v
+		}
+		jsonBytes, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal config: %w", err)
+		}
+		fmt.Println(string(jsonBytes))
+		return nil
+	}
+
+	matched := 0
 	for _, k := range keys {
+		if filter != "" && !strings.Contains(strings.ToLower(k), filter) {
+			continue
+		}
 		v := out[k]
 		if !configListShowSecrets {
 			v = redactValueForDisplay(k, v, false)
 		}
 		fmt.Printf("%s = %s\n", getCategoryColor(k)(k), v)
+		matched++
+	}
+
+	if filter != "" && matched == 0 {
+		printer.Warning("No config keys matching %q", filter)
 	}
 	return nil
 }
@@ -641,8 +811,28 @@ func setConfigValue(cfg *config.Config, key, value string) error {
 		return setStorageValue(cfg, parts[1:], value)
 	case "llm_config":
 		return setLLMValue(cfg, parts[1:], value)
+	case "cloud":
+		return setCloudMainValue(cfg, parts[1:], value)
 	default:
 		return fmt.Errorf("unknown config section: %s", parts[0])
+	}
+	return nil
+}
+
+// setCloudMainValue sets a cloud config field in the main osm-settings
+func setCloudMainValue(cfg *config.Config, parts []string, value string) error {
+	if len(parts) == 0 {
+		return fmt.Errorf("missing cloud field. Use: cloud.enabled, cloud.cloud_path, or cloud.cloud_settings")
+	}
+	switch parts[0] {
+	case "enabled":
+		cfg.Cloud.Enabled = (value == "true")
+	case "cloud_path":
+		cfg.Cloud.CloudPath = value
+	case "cloud_settings":
+		cfg.Cloud.CloudSettings = value
+	default:
+		return fmt.Errorf("unknown cloud field: %s. For provider/limits config use: osmedeus cloud config set <key> <value>", parts[0])
 	}
 	return nil
 }
@@ -824,14 +1014,32 @@ func getCategoryColor(key string) func(string) string {
 		return terminal.Teal
 	case strings.HasPrefix(key, "llm_config."):
 		return terminal.HiBlue
-	case strings.HasPrefix(key, "cloud."),
-		strings.HasPrefix(key, "providers."),
-		strings.HasPrefix(key, "defaults."),
-		strings.HasPrefix(key, "limits."),
-		strings.HasPrefix(key, "state."),
-		strings.HasPrefix(key, "ssh."),
-		strings.HasPrefix(key, "setup."):
+	case strings.HasPrefix(key, "cloud."):
 		return terminal.HiCyan
+	case strings.HasPrefix(key, "providers.aws."):
+		return terminal.Green
+	case strings.HasPrefix(key, "providers.azure."):
+		return terminal.Blue
+	case strings.HasPrefix(key, "providers.digitalocean."):
+		return terminal.HiCyan
+	case strings.HasPrefix(key, "providers.gcp."):
+		return terminal.Magenta
+	case strings.HasPrefix(key, "providers.hetzner."):
+		return terminal.Red
+	case strings.HasPrefix(key, "providers.linode."):
+		return terminal.Teal
+	case strings.HasPrefix(key, "providers."):
+		return terminal.Cyan
+	case strings.HasPrefix(key, "defaults."):
+		return terminal.Cyan
+	case strings.HasPrefix(key, "limits."):
+		return terminal.Yellow
+	case strings.HasPrefix(key, "setup."):
+		return terminal.HiMagenta
+	case strings.HasPrefix(key, "ssh."):
+		return terminal.HiBlue
+	case strings.HasPrefix(key, "state."):
+		return terminal.Gray
 	default:
 		return terminal.White
 	}
@@ -1378,4 +1586,192 @@ func globToRegex(pattern string) (*regexp.Regexp, error) {
 	}
 	sb.WriteString("$")
 	return regexp.Compile(sb.String())
+}
+
+// resolveConfigSetPairs returns key-value pairs from either positional args, a file, or stdin.
+// When fromFile is "-", reads from stdin. When non-empty, reads from the given path.
+// Otherwise falls back to positional args.
+func resolveConfigSetPairs(args []string, fromFile string) ([][2]string, error) {
+	if fromFile == "-" {
+		// Read from stdin
+		data, err := readStdinData()
+		if err != nil {
+			return nil, fmt.Errorf("failed to read stdin: %w", err)
+		}
+		return parseConfigSetLines(string(data))
+	}
+
+	if fromFile != "" {
+		data, err := os.ReadFile(fromFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read file %s: %w", fromFile, err)
+		}
+		return parseConfigSetLines(string(data))
+	}
+
+	// No file/stdin — check if stdin has piped data and no positional args
+	if len(args) == 0 {
+		if hasStdinPipe() {
+			data, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read stdin: %w", err)
+			}
+			return parseConfigSetLines(string(data))
+		}
+		return nil, fmt.Errorf("requires a key and value, e.g.: config set <key> <value>\n  or use --from-file <path> / pipe via stdin")
+	}
+
+	// Positional args — single key-value pair
+	key, value, err := normalizeConfigSetArgs(args)
+	if err != nil {
+		return nil, err
+	}
+	return [][2]string{{key, value}}, nil
+}
+
+// parseConfigSetLines parses multi-line input into key-value pairs.
+// Supported formats per line:
+//
+//	key value
+//	key = value
+//	key="value"
+//	osmedeus config set key value
+//	osmedeus cloud config set key value
+func parseConfigSetLines(input string) ([][2]string, error) {
+	var pairs [][2]string
+	scanner := bufio.NewScanner(strings.NewReader(input))
+	lineNum := 0
+
+	for scanner.Scan() {
+		lineNum++
+		line := strings.TrimSpace(scanner.Text())
+
+		// Skip empty lines and comments
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Strip leading "osmedeus cloud config set" or "osmedeus config set" prefix
+		line = stripConfigSetPrefix(line)
+
+		// Parse key-value from the remaining content
+		key, value, err := parseKeyValueLine(line)
+		if err != nil {
+			return nil, fmt.Errorf("line %d: %w", lineNum, err)
+		}
+
+		pairs = append(pairs, [2]string{key, value})
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	if len(pairs) == 0 {
+		return nil, fmt.Errorf("no key-value pairs found in input")
+	}
+
+	return pairs, nil
+}
+
+// stripConfigSetPrefix removes known CLI prefixes from a config set line.
+func stripConfigSetPrefix(line string) string {
+	// Try to strip "osmedeus cloud config set " or "osmedeus config set "
+	prefixes := []string{
+		"osmedeus cloud config set ",
+		"osmedeus config set ",
+	}
+	lower := strings.ToLower(line)
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return strings.TrimSpace(line[len(prefix):])
+		}
+	}
+	return line
+}
+
+// parseKeyValueLine parses a single line into a key and value.
+// Supports: "key value", "key = value", "key=value", with optional quotes around value.
+func parseKeyValueLine(line string) (string, string, error) {
+	// Try key=value (no spaces around =)
+	if idx := strings.Index(line, "="); idx > 0 {
+		key := strings.TrimSpace(line[:idx])
+		value := strings.TrimSpace(line[idx+1:])
+		if !strings.Contains(key, " ") && key != "" {
+			return key, unquoteValue(value), nil
+		}
+	}
+
+	// Split by whitespace, treating quoted strings as single tokens
+	parts := splitRespectingQuotes(line)
+	if len(parts) < 2 {
+		return "", "", fmt.Errorf("cannot parse key-value from: %s", line)
+	}
+
+	key := parts[0]
+	// Skip "=" token if present (e.g., "key = value")
+	rest := parts[1:]
+	if len(rest) > 1 && rest[0] == "=" {
+		rest = rest[1:]
+	}
+	if len(rest) == 0 {
+		return "", "", fmt.Errorf("missing value for key: %s", key)
+	}
+
+	value := strings.Join(rest, " ")
+	return key, unquoteValue(value), nil
+}
+
+// splitRespectingQuotes splits a string by whitespace but keeps quoted strings together.
+func splitRespectingQuotes(s string) []string {
+	var parts []string
+	var current strings.Builder
+	inQuote := rune(0)
+
+	for _, r := range s {
+		switch {
+		case inQuote != 0:
+			if r == inQuote {
+				inQuote = 0
+			} else {
+				current.WriteRune(r)
+			}
+		case r == '"' || r == '\'':
+			inQuote = r
+		case r == ' ' || r == '\t':
+			if current.Len() > 0 {
+				parts = append(parts, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteRune(r)
+		}
+	}
+	if current.Len() > 0 {
+		parts = append(parts, current.String())
+	}
+	return parts
+}
+
+// unquoteValue strips surrounding quotes from a value string.
+func unquoteValue(s string) string {
+	if len(s) >= 2 {
+		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
+			return s[1 : len(s)-1]
+		}
+	}
+	return s
+}
+
+// hasStdinPipe returns true if stdin is a pipe (not a terminal).
+func hasStdinPipe() bool {
+	stat, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return (stat.Mode() & os.ModeCharDevice) == 0
+}
+
+// readStdinData reads all data from stdin.
+func readStdinData() ([]byte, error) {
+	return io.ReadAll(os.Stdin)
 }

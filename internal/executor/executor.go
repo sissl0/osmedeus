@@ -603,6 +603,36 @@ func formatDuration(d time.Duration) string {
 }
 
 // printDryRunHeader prints a formatted header for dry-run mode
+// specialToggleParams maps param names to their descriptions for the tip message.
+// These are params that are disabled by default but can significantly increase scan results.
+var specialToggleParams = map[string]string{
+	"enableDnsBruteFocing": "DNS brute forcing",
+	"enablePermutation":    "domain permutation",
+	"enableSYNScan":        "SYN scanning (may alert cloud providers)",
+}
+
+// collectDisabledToggles returns the subset of special toggle params that exist
+// in the workflow and are resolved to false.
+func collectDisabledToggles(params []core.Param, execCtx *core.ExecutionContext) map[string]string {
+	disabled := make(map[string]string)
+	for _, p := range params {
+		desc, isSpecial := specialToggleParams[p.Name]
+		if !isSpecial {
+			continue
+		}
+		val, ok := execCtx.GetParam(p.Name)
+		if !ok {
+			// param exists in workflow but wasn't resolved — treat as disabled
+			disabled[p.Name] = desc
+			continue
+		}
+		if boolVal, isBool := val.(bool); isBool && !boolVal {
+			disabled[p.Name] = desc
+		}
+	}
+	return disabled
+}
+
 func printDryRunHeader(workflowName, workflowKind, target, tactic string, stepCount int, execCtx *core.ExecutionContext) {
 	separator := strings.Repeat("═", 52)
 
@@ -1202,6 +1232,10 @@ func (e *Executor) ExecuteModule(ctx context.Context, module *core.Workflow, par
 	} else if e.progressBar == nil {
 		toggle, speed, _, _ := core.CategorizeParams(module.Params)
 		e.printer.WorkflowInfo(module.Name, module.Description, module.Tags, string(module.Runner), len(module.Steps), len(toggle), len(speed))
+
+		// Show tip for disabled special toggle params
+		disabledToggles := collectDisabledToggles(module.Params, execCtx)
+		e.printer.DisabledTogglesTip(disabledToggles)
 	}
 
 	// Show target space folder location
@@ -2583,6 +2617,14 @@ func (e *Executor) executeStep(ctx context.Context, step *core.Step, execCtx *co
 			result.InlineResults = append(result.InlineResults, condResults...)
 			if gotoStep != "" {
 				result.NextStep = gotoStep
+			}
+		}
+		// Print inline results output to terminal
+		if e.progressBar == nil && !e.silent {
+			for _, ir := range result.InlineResults {
+				if ir != nil && ir.Output != "" {
+					e.printer.VerboseOutput(ir.Output)
+				}
 			}
 		}
 	}

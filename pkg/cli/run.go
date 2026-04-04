@@ -326,20 +326,20 @@ func applyWorkflowPreferences(prefs *core.Preferences, printer *terminal.Printer
 func handleTargetTypeMismatchError(err error) bool {
 	var ttmErr *executor.TargetTypeMismatchError
 	if errors.As(err, &ttmErr) {
-		fmt.Println()
-		fmt.Printf("%s %s\n", terminal.Red("✘"), terminal.BoldRed("Target type mismatch"))
-		fmt.Printf("  Supplied: %s\n", ttmErr.Supplied)
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintf(os.Stderr, "%s %s\n", terminal.Red("✘"), terminal.BoldRed("Target type mismatch"))
+		fmt.Fprintf(os.Stderr, "  Supplied: %s\n", ttmErr.Supplied)
 		if ttmErr.DetectedType != "" {
-			fmt.Printf("  Detected type: %s\n", ttmErr.DetectedType)
+			fmt.Fprintf(os.Stderr, "  Detected type: %s\n", ttmErr.DetectedType)
 		}
-		fmt.Printf("  %s %s\n", terminal.HiBlue("Required Params:"), ttmErr.ExpectedType)
-		fmt.Println()
+		fmt.Fprintf(os.Stderr, "  %s dependency required types: %s\n", terminal.HiBlue("✘"), ttmErr.ExpectedType)
+		fmt.Fprintln(os.Stderr)
 		info := terminal.Cyan(terminal.SymbolInfo)
-		fmt.Printf("  %s %s\n", info, terminal.HiBlue("\"Target\" in Required Params is supplied via -t flag (e.g., -t example.com) or each line from -T list-of-targets.txt"))
-		fmt.Printf("  %s %s\n", info, terminal.Yellow("Hint: Use --skip-validation to bypass this check"))
-		fmt.Printf("  %s %s\n", info, terminal.Yellow("Hint: Use --convert-to-file to write targets into a temp file and use the file path as the target"))
-		fmt.Printf("  %s %s\n", info, terminal.Yellow("Hint: Use --convert-file-to-line to read a file target and expand each line as a separate target"))
-		fmt.Println()
+		fmt.Fprintf(os.Stderr, "  %s %s\n", info, terminal.HiBlue("\"Target\" in Required Params is supplied via -t flag (e.g., -t example.com) or each line from -T list-of-targets.txt"))
+		fmt.Fprintf(os.Stderr, "  %s %s\n", info, terminal.Yellow("Hint: Use --skip-validation to bypass this check"))
+		fmt.Fprintf(os.Stderr, "  %s %s\n", info, terminal.Yellow("Hint: Use --convert-to-file to write targets into a temp file and use the file path as the target"))
+		fmt.Fprintf(os.Stderr, "  %s %s\n", info, terminal.Yellow("Hint: Use --convert-file-to-line to read a file target and expand each line as a separate target"))
+		fmt.Fprintln(os.Stderr)
 		return true
 	}
 	return false
@@ -392,9 +392,13 @@ func runRun(cmd *cobra.Command, args []string) error {
 
 	// Validate --run-priority flag
 	if runPriority != "" {
-		validPriorities := map[string]bool{"low": true, "normal": true, "high": true, "critical": true}
+		validPriorities := map[string]bool{"low": true, "normal": true, "medium": true, "high": true, "critical": true}
 		if !validPriorities[runPriority] {
-			return fmt.Errorf("invalid --run-priority value '%s'. Must be one of: low, normal, high, critical", runPriority)
+			return fmt.Errorf("invalid --run-priority value '%s'. Must be one of: low, normal, medium, high, critical", runPriority)
+		}
+		// Normalize "medium" to "normal"
+		if runPriority == "medium" {
+			runPriority = "normal"
 		}
 		if serverURL == "" {
 			return fmt.Errorf("--run-priority requires --server-url to be specified")

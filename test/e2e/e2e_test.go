@@ -254,3 +254,33 @@ func runCLIWithLogAndBase(t *testing.T, log *TestLogger, args ...string) (baseDi
 
 	return baseDir, stdout, stderr, err
 }
+
+// runCLIInBase runs the CLI binary with a pre-existing base directory (for multi-step tests
+// that need shared config across invocations).
+func runCLIInBase(t *testing.T, log *TestLogger, baseDir string, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
+	binary := getBinaryPath(t)
+	workspacesDir := filepath.Join(baseDir, "workspaces")
+	_ = os.MkdirAll(workspacesDir, 0755)
+	args = append([]string{"--base-folder", baseDir}, args...)
+
+	log.Command(args...)
+
+	cmd := exec.Command(binary, args...)
+	cmd.Env = append(os.Environ(), "OSM_SKIP_PATH_SETUP=1", "OSM_WORKSPACES="+workspacesDir)
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+
+	err = cmd.Run()
+	stdout = stdoutBuf.String()
+	stderr = stderrBuf.String()
+
+	log.Result(stdout, stderr)
+
+	if err != nil {
+		log.Error("Command failed: %v", err)
+	}
+
+	return stdout, stderr, err
+}

@@ -111,7 +111,7 @@ func UsageRun() string {
   ` + terminal.Green("# Split into 4 equal chunks and run chunk 0") + `
   osmedeus run ` + terminal.Yellow("-m") + ` recon ` + terminal.Yellow("-T") + ` targets.txt ` + terminal.Yellow("--chunk-count") + ` 4 ` + terminal.Yellow("--chunk-part") + ` 0
 
-  ` + terminal.Green("# Distributed processing across machines") + `
+  ` + terminal.Green("# Manual target splitting across machines") + `
   osmedeus run ` + terminal.Yellow("-m") + ` recon ` + terminal.Yellow("-T") + ` targets.txt ` + terminal.Yellow("--chunk-size") + ` 250 ` + terminal.Yellow("--chunk-part") + ` 0  ` + terminal.Gray("# Machine 1") + `
   osmedeus run ` + terminal.Yellow("-m") + ` recon ` + terminal.Yellow("-T") + ` targets.txt ` + terminal.Yellow("--chunk-size") + ` 250 ` + terminal.Yellow("--chunk-part") + ` 1  ` + terminal.Gray("# Machine 2") + `
 
@@ -554,6 +554,8 @@ func UsageConfigSet() string {
 
 ` + terminal.BoldCyan("▷ Syntax") + `
   osmedeus config set <key> <value>
+  osmedeus config set ` + terminal.Yellow("--from-file") + ` <path>
+  cat config.txt | osmedeus config set ` + terminal.Yellow("--from-file") + ` -
 
 ` + terminal.BoldCyan("▷ Examples") + `
   ` + terminal.Green("osmedeus config set server.port 9000") + `
@@ -563,6 +565,19 @@ func UsageConfigSet() string {
   ` + terminal.Green("osmedeus config set scan_tactic.default 20") + `
   ` + terminal.Green("osmedeus config set global_vars.github_token ghp_xxx") + `
   ` + terminal.Green("osmedeus config set notification.enabled true") + `
+
+  ` + terminal.Green("# Batch set from a file") + `
+  osmedeus config set ` + terminal.Yellow("--from-file") + ` my-settings.txt
+
+  ` + terminal.Green("# Pipe from stdin") + `
+  cat my-settings.txt | osmedeus config set ` + terminal.Yellow("--from-file") + ` -
+
+` + terminal.BoldCyan("▷ File Format") + `
+  Lines can use any of these formats:
+    server.port 9000
+    server.port = 9000
+    osmedeus config set server.port 9000
+  Lines starting with # are ignored.
 
 ` + terminal.BoldCyan("▷ Available Keys") + `
   ` + terminal.Yellow("base_folder") + `                    Base directory path

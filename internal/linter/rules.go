@@ -233,6 +233,13 @@ func (r *UndefinedVariableRule) Check(wast *WorkflowAST) []LintIssue {
 	for i, step := range w.Steps {
 		stepPrefix := fmt.Sprintf("steps[%d]", i)
 
+		// Add this step's exports to defined BEFORE checking fields,
+		// because decision conditions can reference the step's own exports
+		// (exports are merged into context before decision evaluation at runtime).
+		for exportName := range step.Exports {
+			defined[exportName] = true
+		}
+
 		// Check all fields of this step
 		checkStepFieldsForUndefinedVars(&step, stepPrefix, defined, triggerVars, hasEventTrigger, wast, r, &issues)
 
@@ -250,11 +257,6 @@ func (r *UndefinedVariableRule) Check(wast *WorkflowAST) []LintIssue {
 		// Recurse into parallel_steps
 		for j := range step.ParallelSteps {
 			checkStepFieldsForUndefinedVars(&step.ParallelSteps[j], fmt.Sprintf("%s.parallel_steps[%d]", stepPrefix, j), defined, triggerVars, hasEventTrigger, wast, r, &issues)
-		}
-
-		// After processing this step, add its exports to defined
-		for exportName := range step.Exports {
-			defined[exportName] = true
 		}
 
 		// Add foreach variable to defined for subsequent steps

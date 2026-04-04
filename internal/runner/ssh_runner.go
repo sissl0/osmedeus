@@ -256,6 +256,43 @@ func (r *SSHRunner) CopyFromRemote(ctx context.Context, remotePath, localPath st
 	return nil
 }
 
+// CopyFromRemoteSFTP copies a file from the SSH host to local using SFTP (no rsync dependency).
+func (r *SSHRunner) CopyFromRemoteSFTP(remotePath, localPath string) error {
+	if r.client == nil {
+		return fmt.Errorf("SSH client not connected")
+	}
+
+	sftpClient, err := sftp.NewClient(r.client)
+	if err != nil {
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer func() { _ = sftpClient.Close() }()
+
+	remoteFile, err := sftpClient.Open(remotePath)
+	if err != nil {
+		return fmt.Errorf("failed to open remote file %s: %w", remotePath, err)
+	}
+	defer func() { _ = remoteFile.Close() }()
+
+	if dir := filepath.Dir(localPath); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return fmt.Errorf("failed to create local directory: %w", err)
+		}
+	}
+
+	localFile, err := os.Create(localPath)
+	if err != nil {
+		return fmt.Errorf("failed to create local file: %w", err)
+	}
+	defer func() { _ = localFile.Close() }()
+
+	if _, err := io.Copy(localFile, remoteFile); err != nil {
+		return fmt.Errorf("failed to download file: %w", err)
+	}
+
+	return nil
+}
+
 // Type returns the runner type
 func (r *SSHRunner) Type() core.RunnerType {
 	return core.RunnerTypeSSH

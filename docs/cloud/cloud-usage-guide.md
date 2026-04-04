@@ -1,394 +1,383 @@
-# Cloud Infrastructure Usage Guide
+# Cloud Usage Guide
 
-> 📚 **For detailed examples and advanced usage, see [Cloud Usage Examples](./cloud-usage-examples.md)**
+Osmedeus Cloud provisions virtual machines across cloud providers and runs security workflows or arbitrary commands on them. This guide covers the architecture, configuration, and operational patterns.
 
-This guide provides an overview of the cloud infrastructure feature. For comprehensive examples with copy-paste commands, detailed provider configurations, cost calculations, and troubleshooting, refer to the [Cloud Usage Examples](./cloud-usage-examples.md) documentation.
+## How It Works
 
-## Quick Start
-
-### 1. Enable Cloud Features
-
-Edit `~/osmedeus-base/osm-settings.yaml`:
-```yaml
-cloud:
-  cloud_path: "{{base_folder}}/cloud"
-  cloud_settings: "{{base_folder}}/cloud/cloud-settings.yaml"
-  enabled: true  # Set to true
+```
+Local Machine                          Cloud Provider
+┌──────────────┐                      ┌──────────────────┐
+│ osmedeus     │   1. Provision       │  Worker VM 1     │
+│ cloud run    │ ──────────────────►  │  ┌────────────┐  │
+│              │   2. SSH setup       │  │ osmedeus   │  │
+│              │ ──────────────────►  │  │ + tools    │  │
+│              │   3. Stream output   │  └────────────┘  │
+│              │ ◄──────────────────  │                  │
+│              │                      ├──────────────────┤
+│              │   (same for each)    │  Worker VM 2     │
+│              │ ◄──────────────────► │  ...             │
+│              │                      ├──────────────────┤
+│              │   4. Sync results    │  Worker VM N     │
+│              │ ◄──────────────────  │  ...             │
+│              │   5. Destroy         └──────────────────┘
+└──────────────┘
 ```
 
-### 2. Configure Cloud Provider
+**Lifecycle:**
+
+1. **Provision** -- Create VMs via Pulumi (or reuse existing ones)
+2. **Setup** -- SSH into each worker, run setup commands (install osmedeus, tools, etc.)
+3. **Execute** -- Run workflow or custom commands, stream output back in real time
+4. **Sync** -- Download results to local machine (optional)
+5. **Destroy** -- Tear down infrastructure (optional, can be automatic)
+
+## Supported Providers
+
+| Provider | Config Key | Instance Types |
+|----------|-----------|----------------|
+| AWS | `aws` | t3.medium, t3.large, t3.xlarge |
+| DigitalOcean | `digitalocean` | s-2vcpu-4gb, s-4vcpu-8gb, s-8vcpu-16gb |
+| GCP | `gcp` | n1-standard-2, n1-standard-4 |
+| Hetzner | `hetzner` | cx22, cx32, cx42 |
+| Linode | `linode` | g6-standard-2, g6-standard-4 |
+| Azure | `azure` | Standard_B2s, Standard_D2s_v3 |
+
+## Configuration
+
+Cloud config lives in `~/.osmedeus/cloud/cloud-settings.yaml`. Manage it with:
 
 ```bash
-# Set default provider
-osmedeus cloud config set defaults.provider digitalocean
+# Set a value
+osmedeus cloud config set <key> <value>
 
-# Set DigitalOcean credentials
-osmedeus cloud config set providers.digitalocean.token ${DIGITALOCEAN_TOKEN}
-osmedeus cloud config set providers.digitalocean.region nyc1
-osmedeus cloud config set providers.digitalocean.size s-2vcpu-4gb
+# View current config
+osmedeus cloud config list
 
-# Set cost limits
-osmedeus cloud config set limits.max_hourly_spend 10.0
-osmedeus cloud config set limits.max_total_spend 100.0
+# Reset to defaults
+osmedeus cloud config clean
 ```
 
-Alternatively, manually create `~/osmedeus-base/cloud/cloud-settings.yaml` using the example in `docs/cloud-settings.example.yaml`.
+### Required Configuration
 
-### 3. Verify Configuration
+Every provider needs four things: **cloud enabled**, **credentials**, **SSH keys**, and **setup commands**.
 
 ```bash
-# Show current config
-osmedeus cloud config show
+# 0. Enable cloud feature
+osmedeus config set cloud.enabled true
 
-# Check estimated cost for 5 instances
-# (will be implemented in cloud create command)
+# 1. Provider credentials (example: AWS)
+osmedeus cloud config set providers.aws.access_key_id ${AWS_ACCESS_KEY_ID}
+osmedeus cloud config set providers.aws.secret_access_key ${AWS_SECRET_ACCESS_KEY}
+osmedeus cloud config set providers.aws.region ap-southeast-1
+
+# 2. SSH keys (used to connect to workers)
+osmedeus cloud config set ssh.private_key_path ~/.ssh/id_rsa
+osmedeus cloud config set ssh.public_key_path ~/.ssh/id_rsa.pub
+
+# 3. Clean the setup scripts first, then add setup commands (run on each worker before scanning)
+osmedeus cloud config set setup.commands.clear ""
+osmedeus cloud config set setup.commands.add "curl -fsSL https://www.osmedeus.org/install.sh | bash"
+osmedeus cloud config set setup.commands.add "osmedeus install base --preset"
+
+# 4. Set default provider
+osmedeus cloud config set defaults.provider aws
 ```
 
-## Usage Scenarios
-
-### Scenario 1: One-Off Distributed Scan
-
-Provision infrastructure, run scan, collect results, and destroy in one command:
+### Optional Configuration
 
 ```bash
-# Run general reconnaissance on example.com using 5 cloud workers
-osmedeus cloud run -f general -t example.com --instances 5
+# Instance type
+osmedeus cloud config set providers.aws.instance_type t3.large
 
-# Or use multiple targets
-osmedeus cloud run -f general -T targets.txt --instances 10
+# Use spot/preemptible instances (70-80% cheaper)
+osmedeus cloud config set providers.aws.use_spot true
+
+# Cost limits
+osmedeus cloud config set limits.max_hourly_spend 1.00
+osmedeus cloud config set limits.max_total_spend 10.00
+osmedeus cloud config set limits.max_instances 10
+
+# Default timeout
+osmedeus cloud config set defaults.timeout 2h
+
+# SSH user (default: root for most providers, ubuntu for AWS)
+osmedeus cloud config set ssh.user root
 ```
 
-**What happens:**
-1. Validates cost limits
-2. Provisions 5 VMs on DigitalOcean
-3. Waits for workers to register (auto-join via cloud-init)
-4. Distributes workflow tasks across workers
-5. Monitors progress
-6. Collects results via SSH to master workspace
-7. Destroys infrastructure
-8. Shows final cost summary
+### Post-Setup Commands
 
-### Scenario 2: Manual Infrastructure Management
-
-For more control, manage infrastructure lifecycle manually:
+Post-setup commands run per-worker after the main setup, with template variables expanded:
 
 ```bash
-# 1. Create infrastructure
-osmedeus cloud create --instances 5
+osmedeus cloud config set setup.post_commands.add "echo 'Worker {{index}} ready at {{public_ip}}'"
+```
 
-# 2. Verify workers joined
-osmedeus worker status
-# Should show 5 workers with wosm-<ip> IDs
+Available variables: `{{public_ip}}`, `{{private_ip}}`, `{{worker_name}}`, `{{worker_id}}`, `{{infra_id}}`, `{{provider}}`, `{{ssh_user}}`, `{{index}}`
 
-# 3. Run workflows (uses existing workers)
-osmedeus run -f general -t example.com
-osmedeus run -m recon/httprobe -T targets.txt
+## Two Execution Modes
 
-# 4. List cloud infrastructure
+### Workflow Mode (default)
+
+Runs an osmedeus flow or module on remote workers:
+
+```bash
+# Run a flow
+osmedeus cloud run -f fast -t example.com
+
+# Run a module
+osmedeus cloud run -m enum-subdomain -t example.com
+```
+
+### Custom Command Mode
+
+Runs arbitrary shell commands on remote workers -- no osmedeus workflow required:
+
+```bash
+osmedeus cloud run --custom-cmd "nmap -sV {{Target}} -oA /tmp/osm-custom/nmap" -t example.com
+```
+
+`--custom-cmd` is mutually exclusive with `-f`/`-m`. See [Custom Command Mode](#custom-command-mode-details) below.
+
+## Infrastructure Management
+
+### Provisioning
+
+```bash
+# Provision with cloud run (creates + runs + optional destroy)
+osmedeus cloud run -f fast -t example.com --instances 3
+
+# Provision separately (no scan)
+osmedeus cloud create --provider aws -n 3
+```
+
+### Listing
+
+```bash
 osmedeus cloud list
-
-# 5. When done, destroy infrastructure
-osmedeus cloud destroy
 ```
 
-### Scenario 3: Multi-Target Campaign
-
-Run large-scale reconnaissance across many targets:
+### Reusing Existing Infrastructure
 
 ```bash
-# Prepare target list
-echo "hackerone.com" > targets.txt
-echo "bugcrowd.com" >> targets.txt
-echo "synack.com" >> targets.txt
+# Auto-discover from saved state
+osmedeus cloud run -f fast -t example.com --reuse
 
-# Create infrastructure with max instances
-osmedeus cloud create --instances 20
-
-# Run parallel scans (each target gets distributed to workers)
-osmedeus run -f general -T targets.txt -c 5
-
-# Monitor progress
-osmedeus worker status
-
-# Results are in ~/workspaces-osmedeus/
-ls -lh ~/workspaces-osmedeus/
-
-# Cleanup
-osmedeus cloud destroy
+# Specify IPs directly
+osmedeus cloud run -f fast -t example.com --reuse-with "1.2.3.4,5.6.7.8"
 ```
 
-### Scenario 4: Provider Override
-
-Use a different provider for specific tasks:
+### Destroying
 
 ```bash
-# Create AWS infrastructure instead of default
-osmedeus cloud create --provider aws --instances 3
+# Destroy specific infrastructure
+osmedeus cloud destroy <infra-id>
 
-# Or override in run command
-osmedeus cloud run -f general -t example.com --provider gcp --instances 10
+# Destroy all
+osmedeus cloud destroy all --force
+```
+
+## Target Distribution
+
+When scanning multiple targets across multiple workers, osmedeus splits the target list into chunks:
+
+```bash
+# 100 targets across 5 workers = 20 targets each
+osmedeus cloud run -f fast -T targets.txt --instances 5
+
+# Control chunk size: 10 targets per worker
+osmedeus cloud run -f fast -T targets.txt --instances 10 --chunk-size 10
+
+# Control chunk count: split into exactly 3 chunks
+osmedeus cloud run -f fast -T targets.txt --instances 5 --chunk-count 3
+```
+
+Each worker receives its chunk as a file at `/tmp/osm-targets-{i}.txt` on the remote machine.
+
+## Custom Command Mode Details
+
+Run any commands on cloud instances without using osmedeus workflows. Commands run in `/tmp/osm-custom/` on the remote.
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--custom-cmd` | Command to run (repeatable, sequential per worker) |
+| `--custom-post-cmd` | Runs after all custom-cmds succeed (repeatable) |
+| `--sync-path` | Remote path to download after execution (repeatable) |
+| `--sync-dest` | Local base directory for downloads (default: `./osm-sync-back`) |
+
+### Template Variables
+
+All commands and sync paths support these variables:
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `{{Target}}` | Target string, or chunk file path with `-T` | `example.com` or `/tmp/osm-targets-0.txt` |
+| `{{public_ip}}` | Worker's public IP | `203.0.113.10` |
+| `{{private_ip}}` | Worker's private IP | `10.0.0.5` |
+| `{{worker_name}}` | Resource name | `osmw-1775159841-0` |
+| `{{worker_id}}` | Cloud resource ID | `i-0437adf5...` |
+| `{{infra_id}}` | Infrastructure ID | `cloud-aws-1775159841` |
+| `{{provider}}` | Provider name | `aws` |
+| `{{ssh_user}}` | SSH username | `ubuntu` |
+| `{{index}}` | Worker index | `0`, `1`, `2` |
+
+### Execution Rules
+
+- Custom-cmds run **sequentially** on each worker, but **in parallel** across workers
+- If any `--custom-cmd` fails (non-zero exit), remaining commands and all `--custom-post-cmd` are skipped for that worker
+- Post-cmd failures are logged but do not affect other workers
+
+### Sync-Back
+
+Downloaded files are placed at: `<sync-dest>/<worker_name>-<ip>/<remote_path>`
+
+For example, `--sync-path /tmp/osm-custom/results.txt` from worker `osmw-0` at `1.2.3.4`:
+```
+./osm-sync-back/osmw-0-1.2.3.4/tmp/osm-custom/results.txt
+```
+
+### Examples
+
+```bash
+# Simple: run nmap on a cloud instance
+osmedeus cloud run \
+  --custom-cmd "nmap -sV {{Target}} -oA /tmp/osm-custom/nmap-result" \
+  --sync-path "/tmp/osm-custom/" \
+  -t example.com --auto-destroy
+
+# Multi-step pipeline with post-processing
+osmedeus cloud run \
+  --custom-cmd "subfinder -d {{Target}} -o /tmp/osm-custom/subs.txt" \
+  --custom-cmd "cat /tmp/osm-custom/subs.txt | httpx -o /tmp/osm-custom/live.txt" \
+  --custom-post-cmd "wc -l /tmp/osm-custom/live.txt" \
+  --sync-path "/tmp/osm-custom/subs.txt" \
+  --sync-path "/tmp/osm-custom/live.txt" \
+  -t example.com
+
+# Distribute target list across 5 workers
+osmedeus cloud run \
+  --custom-cmd "cat {{Target}} | nuclei -o /tmp/osm-custom/nuclei.txt" \
+  --sync-path "/tmp/osm-custom/nuclei.txt" \
+  --sync-dest "./nuclei-results" \
+  -T targets.txt --instances 5 --auto-destroy
+```
+
+## Syncing Results
+
+### Workflow Mode: `--sync-back`
+
+Exports osmedeus workspaces (including database state) from remote workers and imports them locally:
+
+```bash
+osmedeus cloud run -f fast -t example.com --sync-back
+```
+
+### Custom Mode: `--sync-path`
+
+Downloads specific files or directories via SFTP:
+
+```bash
+osmedeus cloud run --custom-cmd "..." --sync-path "/tmp/osm-custom/" -t example.com
 ```
 
 ## Cost Management
 
-### Understanding Costs
+### Pre-Provisioning Estimates
+
+Costs are estimated before provisioning. Set limits to prevent overspending:
 
 ```bash
-# DigitalOcean pricing examples:
-# s-1vcpu-1gb:   $5/month  = $0.00744/hour
-# s-2vcpu-4gb:   $15/month = $0.02232/hour
-# s-4vcpu-8gb:   $30/month = $0.04464/hour
-
-# For 5 x s-2vcpu-4gb instances:
-# Hourly: 5 × $0.02232 = $0.1116/hour
-# Daily:  $0.1116 × 24 = $2.6784/day
+osmedeus cloud config set limits.max_hourly_spend 1.00
+osmedeus cloud config set limits.max_total_spend 10.00
+osmedeus cloud config set limits.max_instances 10
 ```
 
-### Cost Limits
+### Spot/Preemptible Instances
 
-Limits are enforced at two stages:
-
-1. **Pre-provisioning**: Checks `max_hourly_spend` before creating infrastructure
-2. **During execution**: Checks `max_total_spend` every 30 seconds
+Save 70-80% on instance costs:
 
 ```bash
-# Set conservative limits for testing
-osmedeus cloud config set limits.max_hourly_spend 0.5
-osmedeus cloud config set limits.max_total_spend 5.0
+# AWS spot instances
+osmedeus cloud config set providers.aws.use_spot true
 
-# This will fail if it would exceed limits
-osmedeus cloud create --instances 50
-# Error: estimated hourly cost ($1.116) exceeds limit ($0.50)
+# GCP preemptible instances
+osmedeus cloud config set providers.gcp.use_preemptible true
 ```
 
-### Cost Monitoring
+### Cost Reference
 
-During execution, you'll see cost updates:
-```
-[INFO] Creating Cloud Infrastructure
-[INFO] Provider: digitalocean, Mode: vm, Instances: 5
-[INFO] Estimated cost: $0.11/hour ($2.68/day)
-[INFO] Provisioning 5 droplets...
-[INFO] Waiting for workers... (3/5 registered)
-[INFO] All workers ready!
-[INFO] Running workflow...
-[INFO] Cost: Elapsed: 0h 15m | Current: $0.03 | Rate: $0.11/hr
-[SUCCESS] Workflow complete!
-[INFO] Final cost: $0.05 (18 minutes)
-```
+| Provider | Instance | vCPU | RAM | Hourly |
+|----------|----------|------|-----|--------|
+| Hetzner | cx22 | 2 | 4 GB | ~$0.007 |
+| Linode | g6-standard-2 | 2 | 4 GB | $0.018 |
+| DigitalOcean | s-2vcpu-4gb | 2 | 4 GB | $0.02232 |
+| AWS | t3.medium | 2 | 4 GB | $0.0416 |
+| GCP | n1-standard-2 | 2 | 7.5 GB | $0.095 |
+| Azure | Standard_B2s | 2 | 4 GB | $0.042 |
 
-## Worker Management
+**Example:** 5 DigitalOcean s-2vcpu-4gb instances for 2 hours = 5 x $0.02232 x 2 = **$0.22**
 
-### Worker Auto-Registration
+## Worker Setup
 
-Cloud VMs automatically register as workers via cloud-init script:
+Workers are set up via SSH after provisioning. The setup flow:
+
+1. **Cloud-init** (automatic): Installs SSH keys, basic packages
+2. **Setup commands** (`setup.commands`): Install osmedeus, tools, base data
+3. **Post-setup commands** (`setup.post_commands`): Per-worker configuration with template variables
+
+### Ansible Alternative
+
+For complex setups, use Ansible instead of SSH commands:
 
 ```bash
-#!/bin/bash
-# Installed on boot by cloud provider
-
-# Install osmedeus
-curl -fsSL https://www.osmedeus.org/install.sh | bash
-
-# Join master as worker
-osmedeus worker join --redis-url redis://master:6379 --get-public-ip
-# Worker ID: wosm-203.0.113.42
+osmedeus cloud config set setup.ansible.enabled true
+osmedeus cloud config set setup.ansible.playbook_path /path/to/playbook.yaml
+osmedeus cloud run -f fast -t example.com --ansible
 ```
 
-### Monitoring Workers
+### Setup on Existing Machines
 
 ```bash
-# List all workers
-osmedeus worker status
-
-# Example output:
-# ID                 STATUS  TASKS  IP             JOINED
-# wosm-203.0.113.1   idle    5/0    203.0.113.1    2m ago
-# wosm-203.0.113.2   busy    3/0    203.0.113.2    2m ago
-# wosm-203.0.113.3   idle    7/0    203.0.113.3    2m ago
-```
-
-### Debugging Worker Issues
-
-```bash
-# If workers don't register:
-# 1. Check cloud infrastructure status
-osmedeus cloud list
-
-# 2. SSH into a VM manually
-ssh root@<vm-ip>
-
-# 3. Check osmedeus worker logs
-journalctl -u osmedeus-worker -f
-
-# 4. Check Redis connectivity
-redis-cli -h <master-redis-ip> ping
-```
-
-## Advanced Configuration
-
-### Custom Worker Setup
-
-Add custom commands to run on worker boot:
-
-```yaml
-# In cloud-settings.yaml
-setup:
-  commands:
-    - "apt-get update && apt-get install -y custom-tool"
-    - "echo 'export CUSTOM_VAR=value' >> ~/.bashrc"
-    - "cp /path/to/config /etc/config"
-```
-
-### Using Custom Snapshots
-
-Pre-bake VMs with all tools installed for faster boot:
-
-```bash
-# 1. Create a VM manually
-# 2. Install osmedeus and all tools
-# 3. Create snapshot via provider console
-# 4. Get snapshot ID
-
-# Configure to use snapshot
-osmedeus cloud config set providers.digitalocean.snapshot_id <snapshot-id>
-
-# Now VMs boot with everything pre-installed
-osmedeus cloud create --instances 5
-# Boot time: ~30s instead of ~5min
-```
-
-### SSH Key Management
-
-```bash
-# Option 1: Use existing SSH key
-osmedeus cloud config set ssh.private_key_path ~/.ssh/id_rsa
-
-# Option 2: Generate new key for cloud workers
-ssh-keygen -t rsa -b 4096 -f ~/.ssh/osmedeus-cloud -N ""
-osmedeus cloud config set ssh.private_key_path ~/.ssh/osmedeus-cloud
-osmedeus cloud config set ssh.public_key_path ~/.ssh/osmedeus-cloud.pub
+osmedeus cloud setup --reuse-with "1.2.3.4,5.6.7.8"
 ```
 
 ## Troubleshooting
 
-### Issue: Workers don't register
+### Workers Not Connecting
 
-**Possible causes:**
-1. Redis URL not reachable from worker VMs
-2. Cloud-init script failed
-3. Network/firewall blocking connection
-
-**Solution:**
 ```bash
-# Check infrastructure status
-osmedeus cloud list
+# Verbose setup to see SSH output
+osmedeus cloud run -f fast -t example.com --verbose-setup
 
-# SSH into a VM
-ssh root@<vm-ip>
-
-# Check cloud-init logs
-tail -f /var/log/cloud-init-output.log
-
-# Check worker process
-ps aux | grep osmedeus
+# Debug mode for full logging
+osmedeus cloud run -f fast -t example.com --debug
 ```
 
-### Issue: Cost exceeded during execution
+### Infrastructure Stuck
 
-**What happens:**
-- Infrastructure is immediately destroyed
-- Partial results are collected
-- Error message shows final cost
-
-**Prevention:**
-```bash
-# Set realistic limits
-osmedeus cloud config set limits.max_total_spend 50.0
-
-# Estimate before running
-# (5 instances × $0.02/hr × 2 hours = $0.20)
-```
-
-### Issue: Infrastructure not destroyed
-
-**Recovery:**
 ```bash
 # List all infrastructure
 osmedeus cloud list
 
-# Destroy by ID
-osmedeus cloud destroy <infrastructure-id>
+# Force destroy everything
+osmedeus cloud destroy all --force
+```
 
-# Or destroy directly via provider console
-# (check cloud-state/*.json for resource IDs)
+### Cost Exceeded
+
+If cost limits are hit, provisioning is blocked. Adjust limits:
+
+```bash
+osmedeus cloud config set limits.max_hourly_spend 5.00
 ```
 
 ## Best Practices
 
-1. **Start small**: Test with 1-2 instances before scaling up
-2. **Set cost limits**: Always configure max_hourly_spend and max_total_spend
-3. **Use snapshots**: Pre-bake images for faster provisioning
-4. **Clean up**: Always destroy infrastructure when done
-5. **Monitor costs**: Check cloud provider billing dashboard
-6. **Secure Redis**: Use password authentication for Redis in production
-7. **SSH keys**: Use dedicated keys for cloud workers, not personal keys
-
-## Examples
-
-### Example 1: Quick Domain Recon
-```bash
-osmedeus cloud run -m recon/httprobe -t example.com --instances 3
-```
-
-### Example 2: Large-Scale Asset Discovery
-```bash
-# Prepare target list
-cat targets.txt
-# example1.com
-# example2.com
-# ...
-# example100.com
-
-# Run distributed scan
-osmedeus cloud run -f general -T targets.txt --instances 20
-```
-
-### Example 3: Custom Workflow with Specific Provider
-```bash
-osmedeus cloud run \
-  -f custom-workflow \
-  -t target.com \
-  --provider aws \
-  --mode vm \
-  --instances 10
-```
-
-## Current Limitations
-
-⚠️ **Note**: As of this implementation, the following features are **foundational** and require completion:
-
-1. **DigitalOcean droplet creation**: Pulumi program needs completion
-2. **Cloud run workflow**: Task distribution and monitoring needs implementation
-3. **Result collection**: SSH sync needs integration
-4. **Other providers**: AWS, GCP, Linode, Azure need implementation
-
-The CLI commands and infrastructure are in place, but will show "not yet fully implemented" errors until the above are completed.
-
-## Getting Help
-
-```bash
-# Show cloud command help
-osmedeus cloud --help
-
-# Show specific subcommand help
-osmedeus cloud config --help
-osmedeus cloud create --help
-osmedeus cloud run --help
-
-# Check configuration
-osmedeus cloud config show
-
-# List available providers
-# (Currently: digitalocean, aws, gcp, linode, azure)
-```
+1. **Always set cost limits** before running large-scale scans
+2. **Use `--auto-destroy`** to avoid forgotten instances accruing charges
+3. **Use spot instances** for non-critical scans (70-80% savings)
+4. **Use `--reuse`** to avoid re-provisioning for iterative work
+5. **Start small** -- test with 1 instance before scaling up
+6. **Use custom snapshots** with tools pre-installed to cut setup time from 5min to 30s
+7. **Check `cloud list`** regularly to verify no orphaned infrastructure

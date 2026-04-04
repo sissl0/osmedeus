@@ -1,0 +1,59 @@
+# Osmedeus Configuration (Ansible-managed)
+# ==========================================
+# WARNING: This file is managed by Ansible. Local changes will be overwritten.
+
+# Environment Paths
+environment:
+  binaries: "{{ '{{base_folder}}' }}/external-binaries"
+  external_data: "{{ '{{base_folder}}' }}/external-data"
+  external_configs: "{{ '{{base_folder}}' }}/external-configs"
+  workspaces: {{ osm_workspaces_dir }}
+  workflows: "{{ '{{base_folder}}' }}/workflows"
+  snapshot: "{{ '{{base_folder}}' }}/snapshot"
+
+# Database - SQLite
+database:
+  db_engine: sqlite
+  db_path: "{{ '{{base_folder}}' }}/database-osm.sqlite"
+  connection_timeout: 60
+
+# Server
+server:
+  host: "{{ osm_server_host }}"
+  port: {{ osm_server_port }}
+  ui_path: "{{ '{{base_folder}}' }}/ui/"
+  workspace_prefix_key: ""
+
+  simple_user_map_key:
+    {{ osm_admin_user }}: "{{ osm_admin_password }}"
+
+  jwt:
+    secret_signing_key: "{{ osm_jwt_secret }}"
+    expiration_minutes: {{ osm_jwt_expiration_minutes }}
+
+# Scan Tactic
+scan_tactic:
+  aggressive: {{ osm_threads_aggressive }}
+  default: {{ osm_threads_default }}
+  gently: {{ osm_threads_gently }}
+{% if osm_telegram_enabled %}
+
+# Notifications
+notification:
+  telegram:
+    enabled: true
+    bot_token: "{{ osm_telegram_bot_token }}"
+    chat_id: "{{ osm_telegram_chat_id }}"
+{% endif %}
+{% if osm_global_variables | length > 0 %}
+
+# Global Variables
+global_variables:
+{% for var in osm_global_variables %}
+  - name: "{{ var.name }}"
+    value: "{{ var.value }}"
+{% if var.as_env is defined %}
+    as_env: {{ var.as_env | lower }}
+{% endif %}
+{% endfor %}
+{% endif %}

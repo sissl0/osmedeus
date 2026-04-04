@@ -30,10 +30,12 @@ func NewLifecycleManager(cfg *config.CloudConfigs, provider Provider, client *di
 func (lm *LifecycleManager) CreateAndRun(ctx context.Context, opts *CreateOptions) (*Infrastructure, error) {
 	var infra *Infrastructure
 	var err error
+	var infraCreated bool
 
-	// Setup cleanup on failure if configured
+	// Setup cleanup on failure if configured.
+	// Only destroy if infrastructure creation itself failed, not if worker registration failed.
 	defer func() {
-		if err != nil && lm.cfg.Defaults.CleanupOnFailure && infra != nil {
+		if err != nil && !infraCreated && lm.cfg.Defaults.CleanupOnFailure && infra != nil {
 			_ = lm.provider.DestroyInfrastructure(context.Background(), infra)
 		}
 	}()
@@ -51,11 +53,17 @@ func (lm *LifecycleManager) CreateAndRun(ctx context.Context, opts *CreateOption
 	// Initialize cost tracker
 	lm.tracker = NewCostTracker(estimate.HourlyCost, lm.cfg.Limits.MaxTotalSpend)
 
+	// Ensure providers use the resolved state path from config
+	if opts.StatePath == "" && lm.cfg.State.Path != "" {
+		opts.StatePath = lm.cfg.State.Path
+	}
+
 	// Step 2: Create infrastructure
 	infra, err = lm.provider.CreateInfrastructure(ctx, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create infrastructure: %w", err)
 	}
+	infraCreated = true
 
 	// Save state for recovery
 	if err := SaveInfrastructureState(infra, lm.cfg.State.Path); err != nil {
@@ -63,16 +71,21 @@ func (lm *LifecycleManager) CreateAndRun(ctx context.Context, opts *CreateOption
 		fmt.Printf("Warning: failed to save infrastructure state: %v\n", err)
 	}
 
-	// Step 3: Wait for workers to register
-	workerIDs, err := WaitForWorkers(ctx, lm.client, opts.InstanceCount, 5*time.Minute)
-	if err != nil {
-		return infra, fmt.Errorf("failed to wait for workers: %w", err)
-	}
+	// Step 3: Wait for workers to register (only if distributed client is available)
+	if lm.client != nil {
+		workerIDs, waitErr := WaitForWorkers(ctx, lm.client, opts.InstanceCount, 5*time.Minute)
+		if waitErr != nil {
+			// Worker registration failed but infrastructure was created successfully.
+			// Update state and return the infra without failing.
+			_ = SaveInfrastructureState(infra, lm.cfg.State.Path)
+			return infra, fmt.Errorf("infrastructure created but worker registration failed: %w", waitErr)
+		}
 
-	// Update infrastructure with worker IDs
-	for i, workerID := range workerIDs {
-		if i < len(infra.Resources) {
-			infra.Resources[i].WorkerID = workerID
+		// Update infrastructure with worker IDs
+		for i, workerID := range workerIDs {
+			if i < len(infra.Resources) {
+				infra.Resources[i].WorkerID = workerID
+			}
 		}
 	}
 

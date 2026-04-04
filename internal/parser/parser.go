@@ -464,6 +464,23 @@ func (p *Parser) validateStep(step *core.Step, index int) error {
 				}
 			}
 		}
+	case core.StepTypeAgentSDK:
+		// Validate agent-sdk step has at least one message
+		if len(step.Messages) == 0 {
+			return &ValidationError{
+				Field:   fmt.Sprintf("steps[%d].messages", index),
+				Message: "agent-sdk step must have at least one message",
+			}
+		}
+		// Validate messages have content
+		for i, msg := range step.Messages {
+			if msg.Content == nil || msg.Content == "" {
+				return &ValidationError{
+					Field:   fmt.Sprintf("steps[%d].messages[%d].content", index, i),
+					Message: "message content must not be empty",
+				}
+			}
+		}
 	default:
 		return &ValidationError{
 			Field:   fmt.Sprintf("steps[%d].type", index),

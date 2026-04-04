@@ -10,12 +10,15 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"github.com/j3ssie/osmedeus/v5/internal/cloud"
 	"github.com/j3ssie/osmedeus/v5/internal/config"
 	"github.com/j3ssie/osmedeus/v5/internal/core"
 	"github.com/j3ssie/osmedeus/v5/internal/database"
+	"github.com/j3ssie/osmedeus/v5/internal/distributed"
 	"github.com/j3ssie/osmedeus/v5/internal/executor"
 	"github.com/j3ssie/osmedeus/v5/internal/logger"
 	"github.com/j3ssie/osmedeus/v5/internal/parser"
+	"github.com/j3ssie/osmedeus/v5/internal/runner"
 	"go.uber.org/zap"
 )
 
@@ -260,7 +263,7 @@ func executeRunsConcurrently(
 // @Failure 404 {object} map[string]interface{} "Workflow not found"
 // @Security BearerAuth
 // @Router /osm/api/runs [post]
-func CreateRun(cfg *config.Config) fiber.Handler {
+func CreateRun(cfg *config.Config, master *distributed.Master) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		var req CreateRunRequest
 		if err := c.BodyParser(&req); err != nil {
@@ -349,12 +352,16 @@ func CreateRun(cfg *config.Config) fiber.Handler {
 			priority = "normal"
 		}
 		// Validate priority
-		validPriorities := map[string]bool{"low": true, "normal": true, "high": true, "critical": true}
+		validPriorities := map[string]bool{"low": true, "normal": true, "medium": true, "high": true, "critical": true}
 		if !validPriorities[priority] {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"error":   true,
-				"message": "Invalid priority. Must be one of: low, normal, high, critical",
+				"message": "Invalid priority. Must be one of: low, normal, medium, high, critical",
 			})
+		}
+		// Normalize "medium" to "normal"
+		if priority == "medium" {
+			priority = "normal"
 		}
 
 		// Set default run_mode if not specified
@@ -369,6 +376,45 @@ func CreateRun(cfg *config.Config) fiber.Handler {
 				"error":   true,
 				"message": "Invalid run_mode. Must be one of: local, distributed, cloud",
 			})
+		}
+
+		// Validate distributed mode requirements
+		if runMode == "distributed" && master == nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"error":   true,
+				"message": "Distributed mode requires the server to be started with --master flag",
+			})
+		}
+
+		// Validate cloud mode requirements
+		if runMode == "cloud" {
+			if !cfg.Cloud.Enabled {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+					"error":   true,
+					"message": "Cloud mode requires cloud features to be enabled in configuration",
+				})
+			}
+
+			// Validate cloud provider if specified
+			if req.CloudProvider != "" {
+				validProviders := map[string]bool{
+					"aws": true, "gcp": true, "digitalocean": true,
+					"linode": true, "azure": true, "hetzner": true,
+				}
+				if !validProviders[req.CloudProvider] {
+					return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+						"error":   true,
+						"message": "Invalid cloud_provider. Must be one of: aws, gcp, digitalocean, linode, azure, hetzner",
+					})
+				}
+			}
+
+			if req.CloudInstances < 0 {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+					"error":   true,
+					"message": "cloud_instances must be a positive number",
+				})
+			}
 		}
 
 		// Add runner configuration to params if specified
@@ -410,60 +456,311 @@ func CreateRun(cfg *config.Config) fiber.Handler {
 		// Generate a job ID for grouping runs from this request
 		jobID := uuid.New().String()[:8]
 
-		// Create run record(s) and execute
+		// Create run record(s) and execute based on run_mode
 		var runIDs []string
-		if len(targets) == 1 {
-			// Single target - existing behavior
-			params["target"] = targets[0]
+		var infraID string
 
-			// Create run record in database
-			ctx := context.Background()
-			run, _ := createRunRecord(ctx, cfgCopy, workflow, loader, targets[0], params, "api", jobID, priority, runMode)
-			if run != nil {
-				runIDs = append(runIDs, run.RunUUID)
+		switch runMode {
+		case "distributed":
+			// Submit tasks to distributed worker queue
+			for _, target := range targets {
+				targetParams := make(map[string]string)
+				for k, v := range params {
+					targetParams[k] = v
+				}
+				targetParams["target"] = target
+
+				ctx := context.Background()
+				run, _ := createRunRecord(ctx, cfgCopy, workflow, loader, target, targetParams, "api", jobID, priority, runMode)
+				if run != nil {
+					runIDs = append(runIDs, run.RunUUID)
+				}
+
+				kind := "module"
+				if isFlow {
+					kind = "flow"
+				}
+
+				// Convert params to map[string]interface{} for distributed task
+				taskParams := make(map[string]interface{})
+				for k, v := range targetParams {
+					taskParams[k] = v
+				}
+
+				task := &distributed.Task{
+					WorkflowName: workflow.Name,
+					WorkflowKind: kind,
+					Target:       target,
+					Params:       taskParams,
+				}
+
+				if err := master.SubmitTask(ctx, task); err != nil {
+					lgr := logger.Get()
+					lgr.Warn("Failed to submit distributed task", zap.String("target", target), zap.Error(err))
+					if run != nil {
+						_ = database.UpdateRunStatus(ctx, run.RunUUID, "failed", fmt.Sprintf("failed to submit to distributed queue: %v", err))
+					}
+					continue
+				}
+
+				// Log the link between run and distributed task
+				if run != nil && task.ID != "" {
+					lgr := logger.Get()
+					lgr.Info("Linked run to distributed task", zap.String("run_uuid", run.RunUUID), zap.String("task_id", task.ID))
+				}
 			}
 
-			exec := executor.NewExecutor()
-			exec.SetServerMode(true) // Enable file logging for server mode
-			exec.SetLoader(loader)
-			if req.EmptyTarget {
-				exec.SetSkipWorkspace(true)
+		case "cloud":
+			// Provision cloud infrastructure and execute
+			cloudCfg, err := cloud.LoadCloudConfig(cfg.Cloud.CloudSettings)
+			if err != nil {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+					"error":   true,
+					"message": fmt.Sprintf("Failed to load cloud configuration: %v", err),
+				})
 			}
+			cloud.ResolveTemplatePaths(cloudCfg, cfg.BaseFolder)
 
-			// Set up database progress tracking
-			if run != nil {
-				exec.SetDBRunUUID(run.RunUUID)
-				exec.SetDBRunID(run.ID)
-				exec.SetOnStepCompleted(func(stepCtx context.Context, dbRunUUID string) {
-					_ = database.IncrementRunCompletedSteps(stepCtx, dbRunUUID)
+			// Determine provider
+			providerName := req.CloudProvider
+			if providerName == "" {
+				providerName = cloudCfg.Defaults.Provider
+			}
+			if providerName == "" {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+					"error":   true,
+					"message": "No cloud provider specified and no default provider configured",
 				})
 			}
 
-			go func(runID string) {
-				ctx := context.Background()
-				var execErr error
-				if isFlow && workflow.IsFlow() {
-					_, execErr = exec.ExecuteFlow(ctx, workflow, params, cfgCopy)
-				} else {
-					_, execErr = exec.ExecuteModule(ctx, workflow, params, cfgCopy)
+			provider, err := cloud.CreateProvider(cloudCfg, cloud.ProviderType(providerName))
+			if err != nil {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+					"error":   true,
+					"message": fmt.Sprintf("Failed to create cloud provider %q: %v", providerName, err),
+				})
+			}
+
+			if err := provider.Validate(context.Background()); err != nil {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+					"error":   true,
+					"message": fmt.Sprintf("Cloud provider validation failed: %v", err),
+				})
+			}
+
+			// Create run records for all targets
+			for _, target := range targets {
+				targetParams := make(map[string]string)
+				for k, v := range params {
+					targetParams[k] = v
 				}
-				// Update run status in database
-				if runID != "" {
-					if execErr != nil {
-						_ = database.UpdateRunStatus(ctx, runID, "failed", execErr.Error())
-					} else {
-						_ = database.UpdateRunStatus(ctx, runID, "completed", "")
+				targetParams["target"] = target
+
+				ctx := context.Background()
+				run, _ := createRunRecord(ctx, cfgCopy, workflow, loader, target, targetParams, "api", jobID, priority, runMode)
+				if run != nil {
+					runIDs = append(runIDs, run.RunUUID)
+				}
+			}
+
+			// Determine instance count
+			instanceCount := req.CloudInstances
+			if instanceCount <= 0 {
+				instanceCount = 1
+			}
+
+			// Build create options
+			createOpts := &cloud.CreateOptions{
+				Mode:          cloud.ModeVM,
+				InstanceCount: instanceCount,
+				InstanceType:  req.CloudInstanceType,
+				UseSpot:       req.CloudUseSpot,
+				Tags:          map[string]string{"job_id": jobID, "source": "api"},
+				Timeout:       10 * time.Minute,
+			}
+
+			if req.CloudRegion != "" {
+				createOpts.Tags["region_override"] = req.CloudRegion
+			}
+
+			// Execute cloud run in background
+			go func(runUUIDs []string, autoDestroy bool, reuseInfraID string) {
+				ctx := context.Background()
+				lgr := logger.Get()
+
+				var infra *cloud.Infrastructure
+				var provisionErr error
+
+				if reuseInfraID != "" {
+					// Reuse existing infrastructure
+					infra, provisionErr = cloud.LoadInfrastructureState(reuseInfraID, cloudCfg.State.Path)
+					if provisionErr != nil {
+						lgr.Error("Failed to load existing infrastructure", zap.String("infra_id", reuseInfraID), zap.Error(provisionErr))
+						for _, id := range runUUIDs {
+							_ = database.UpdateRunStatus(ctx, id, "failed", fmt.Sprintf("failed to load infrastructure %s: %v", reuseInfraID, provisionErr))
+						}
+						return
+					}
+				} else {
+					// Provision new infrastructure
+					lm := cloud.NewLifecycleManager(cloudCfg, provider, nil)
+					infra, provisionErr = lm.CreateAndRun(ctx, createOpts)
+					if provisionErr != nil {
+						lgr.Error("Failed to provision cloud infrastructure", zap.Error(provisionErr))
+						for _, id := range runUUIDs {
+							_ = database.UpdateRunStatus(ctx, id, "failed", fmt.Sprintf("cloud provisioning failed: %v", provisionErr))
+						}
+						return
 					}
 				}
-			}(func() string {
-				if run != nil {
-					return run.RunUUID
+
+				lgr.Info("Cloud infrastructure ready", zap.String("infra_id", infra.ID), zap.Int("resources", len(infra.Resources)))
+
+				// Execute workflow on cloud workers via SSH
+				kind := "module"
+				if isFlow {
+					kind = "flow"
 				}
-				return ""
-			}())
-		} else {
-			// Multiple targets - concurrent execution
-			go executeRunsConcurrently(workflow, targets, params, cfgCopy, concurrency, isFlow, jobID, priority, runMode)
+
+				var wg sync.WaitGroup
+				for i, target := range targets {
+					resource := infra.Resources[i%len(infra.Resources)]
+					if resource.PublicIP == "" {
+						continue
+					}
+
+					runUUID := ""
+					if i < len(runUUIDs) {
+						runUUID = runUUIDs[i]
+					}
+
+					wg.Add(1)
+					go func(target, ip, runID, wfName, wfKind string) {
+						defer wg.Done()
+						execCtx := context.Background()
+
+						// Build remote command
+						flag := "m"
+						if wfKind == "flow" {
+							flag = "f"
+						}
+						remoteCmd := fmt.Sprintf("osmedeus run -%s %s -t %s", flag, wfName, target)
+
+						// Execute via SSH runner
+						sshRunnerCfg := &core.RunnerConfig{
+							Host:     ip,
+							User:     cloudCfg.SSH.User,
+							KeyFile:  cloudCfg.SSH.PrivateKeyPath,
+							Password: cloudCfg.SSH.Password,
+							Port:     22,
+						}
+
+						sshRunner, sshErr := runner.NewSSHRunner(sshRunnerCfg, "")
+						if sshErr != nil {
+							lgr.Error("Failed to create SSH runner", zap.String("ip", ip), zap.Error(sshErr))
+							if runID != "" {
+								_ = database.UpdateRunStatus(execCtx, runID, "failed", fmt.Sprintf("SSH runner creation failed: %v", sshErr))
+							}
+							return
+						}
+
+						if setupErr := sshRunner.Setup(execCtx); setupErr != nil {
+							lgr.Error("Failed to setup SSH connection", zap.String("ip", ip), zap.Error(setupErr))
+							if runID != "" {
+								_ = database.UpdateRunStatus(execCtx, runID, "failed", fmt.Sprintf("SSH connection failed: %v", setupErr))
+							}
+							return
+						}
+						defer func() { _ = sshRunner.Cleanup(execCtx) }()
+
+						result, execErr := sshRunner.Execute(execCtx, remoteCmd)
+						if runID != "" {
+							if execErr != nil || (result != nil && result.ExitCode != 0) {
+								errMsg := ""
+								if execErr != nil {
+									errMsg = execErr.Error()
+								} else if result != nil {
+									errMsg = fmt.Sprintf("remote command exited with code %d", result.ExitCode)
+								}
+								_ = database.UpdateRunStatus(execCtx, runID, "failed", errMsg)
+							} else {
+								_ = database.UpdateRunStatus(execCtx, runID, "completed", "")
+							}
+						}
+					}(target, resource.PublicIP, runUUID, workflow.Name, kind)
+				}
+
+				// Wait for all targets to complete before optional cleanup
+				wg.Wait()
+
+				// Auto-destroy if requested
+				if autoDestroy && infra != nil {
+					lm := cloud.NewLifecycleManager(cloudCfg, provider, nil)
+					if destroyErr := lm.Destroy(ctx, infra); destroyErr != nil {
+						lgr.Warn("Failed to auto-destroy cloud infrastructure", zap.String("infra_id", infra.ID), zap.Error(destroyErr))
+					}
+				}
+			}(runIDs, req.CloudAutoDestroy, req.CloudReuseInfra)
+
+			// Set infraID for response (generate one for tracking if provisioning new)
+			if req.CloudReuseInfra != "" {
+				infraID = req.CloudReuseInfra
+			} else {
+				infraID = jobID // Will be updated once provisioning completes
+			}
+
+		default:
+			// Local mode - existing behavior
+			if len(targets) == 1 {
+				// Single target
+				params["target"] = targets[0]
+
+				ctx := context.Background()
+				run, _ := createRunRecord(ctx, cfgCopy, workflow, loader, targets[0], params, "api", jobID, priority, runMode)
+				if run != nil {
+					runIDs = append(runIDs, run.RunUUID)
+				}
+
+				exec := executor.NewExecutor()
+				exec.SetServerMode(true)
+				exec.SetLoader(loader)
+				if req.EmptyTarget {
+					exec.SetSkipWorkspace(true)
+				}
+
+				if run != nil {
+					exec.SetDBRunUUID(run.RunUUID)
+					exec.SetDBRunID(run.ID)
+					exec.SetOnStepCompleted(func(stepCtx context.Context, dbRunUUID string) {
+						_ = database.IncrementRunCompletedSteps(stepCtx, dbRunUUID)
+					})
+				}
+
+				go func(runID string) {
+					ctx := context.Background()
+					var execErr error
+					if isFlow && workflow.IsFlow() {
+						_, execErr = exec.ExecuteFlow(ctx, workflow, params, cfgCopy)
+					} else {
+						_, execErr = exec.ExecuteModule(ctx, workflow, params, cfgCopy)
+					}
+					if runID != "" {
+						if execErr != nil {
+							_ = database.UpdateRunStatus(ctx, runID, "failed", execErr.Error())
+						} else {
+							_ = database.UpdateRunStatus(ctx, runID, "completed", "")
+						}
+					}
+				}(func() string {
+					if run != nil {
+						return run.RunUUID
+					}
+					return ""
+				}())
+			} else {
+				// Multiple targets - concurrent execution
+				go executeRunsConcurrently(workflow, targets, params, cfgCopy, concurrency, isFlow, jobID, priority, runMode)
+			}
 		}
 
 		// Build response
@@ -517,6 +814,20 @@ func CreateRun(cfg *config.Config) fiber.Handler {
 			}
 		}
 
+		// Add cloud-specific response fields
+		if runMode == "cloud" {
+			if infraID != "" {
+				response["infra_id"] = infraID
+				response["infra_status_url"] = fmt.Sprintf("/osm/api/cloud/instances/%s/status", infraID)
+			}
+			if req.CloudProvider != "" {
+				response["cloud_provider"] = req.CloudProvider
+			}
+			if req.CloudInstances > 0 {
+				response["cloud_instances"] = req.CloudInstances
+			}
+		}
+
 		return c.Status(fiber.StatusAccepted).JSON(response)
 	}
 }
@@ -543,6 +854,7 @@ func ListRuns(cfg *config.Config) fiber.Handler {
 		workflow := c.Query("workflow")
 		target := c.Query("target")
 		workspace := c.Query("workspace")
+		runMode := c.Query("run_mode")
 
 		if offset < 0 {
 			offset = 0
@@ -555,7 +867,7 @@ func ListRuns(cfg *config.Config) fiber.Handler {
 		}
 
 		ctx := context.Background()
-		result, err := database.ListRuns(ctx, offset, limit, status, workflow, target, workspace)
+		result, err := database.ListRuns(ctx, offset, limit, status, workflow, target, workspace, runMode)
 		if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 				"error":   true,

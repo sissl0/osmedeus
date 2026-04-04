@@ -53,13 +53,50 @@ func CreateProvider(cfg *config.CloudConfigs, providerType ProviderType) (Provid
 			cfg.Providers.DigitalOcean.SSHKeyFingerprint,
 		)
 	case ProviderAWS:
-		return nil, fmt.Errorf("AWS provider not yet implemented")
+		return NewAWSProvider(
+			cfg.Providers.AWS.AccessKeyID,
+			cfg.Providers.AWS.SecretAccessKey,
+			cfg.Providers.AWS.Region,
+			cfg.Providers.AWS.InstanceType,
+			cfg.Providers.AWS.AMI,
+			cfg.Providers.AWS.AMIFilter,
+			cfg.Providers.AWS.UseSpot,
+		)
 	case ProviderGCP:
-		return nil, fmt.Errorf("GCP provider not yet implemented")
+		return NewGCPProvider(
+			cfg.Providers.GCP.ProjectID,
+			cfg.Providers.GCP.CredentialsFile,
+			cfg.Providers.GCP.Region,
+			cfg.Providers.GCP.Zone,
+			cfg.Providers.GCP.MachineType,
+			cfg.Providers.GCP.ImageFamily,
+			cfg.Providers.GCP.UsePreemptible,
+		)
 	case ProviderLinode:
-		return nil, fmt.Errorf("linode provider not yet implemented")
+		return NewLinodeProvider(
+			cfg.Providers.Linode.Token,
+			cfg.Providers.Linode.Region,
+			cfg.Providers.Linode.Type,
+			cfg.Providers.Linode.Image,
+		)
 	case ProviderAzure:
-		return nil, fmt.Errorf("azure provider not yet implemented")
+		return NewAzureProvider(
+			cfg.Providers.Azure.SubscriptionID,
+			cfg.Providers.Azure.TenantID,
+			cfg.Providers.Azure.ClientID,
+			cfg.Providers.Azure.ClientSecret,
+			cfg.Providers.Azure.Location,
+			cfg.Providers.Azure.VMSize,
+			cfg.Providers.Azure.ImageReference,
+		)
+	case ProviderHetzner:
+		return NewHetznerProvider(
+			cfg.Providers.Hetzner.Token,
+			cfg.Providers.Hetzner.Location,
+			cfg.Providers.Hetzner.ServerType,
+			cfg.Providers.Hetzner.Image,
+			cfg.Providers.Hetzner.SSHKeyName,
+		)
 	default:
 		return nil, fmt.Errorf("unknown provider type: %s", providerType)
 	}

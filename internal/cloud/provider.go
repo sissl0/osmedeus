@@ -2,7 +2,13 @@ package cloud
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/base64"
+	"fmt"
+	"strings"
 	"time"
+
+	"github.com/pulumi/pulumi/sdk/v3/go/auto"
 )
 
 // ProviderType represents the cloud provider type
@@ -14,6 +20,7 @@ const (
 	ProviderDigitalOcean ProviderType = "digitalocean"
 	ProviderLinode       ProviderType = "linode"
 	ProviderAzure        ProviderType = "azure"
+	ProviderHetzner      ProviderType = "hetzner"
 )
 
 // ExecutionMode represents the execution mode (VM or serverless)
@@ -82,6 +89,10 @@ type CreateOptions struct {
 
 	// Timeout is the maximum time to wait for infrastructure creation
 	Timeout time.Duration
+
+	// StatePath is the resolved path for Pulumi state storage.
+	// Set by LifecycleManager from the cloud config's State.Path.
+	StatePath string
 }
 
 // Infrastructure represents created cloud infrastructure
@@ -100,6 +111,10 @@ type Infrastructure struct {
 
 	// PulumiStackID is the Pulumi stack identifier
 	PulumiStackID string
+
+	// StatePath is the resolved Pulumi state directory used during creation.
+	// Persisted so that Destroy can locate the correct state.
+	StatePath string `json:"state_path,omitempty"`
 
 	// Resources are the created resources (VMs, functions, etc.)
 	Resources []Resource
@@ -187,4 +202,55 @@ type CostEstimate struct {
 
 	// Notes contains additional cost information
 	Notes []string
+}
+
+// infraSuffix extracts the timestamp suffix from an infrastructure ID
+// (e.g., "cloud-hetzner-1775231420" -> "1775231420").
+func infraSuffix(infraID string) string {
+	if idx := strings.LastIndex(infraID, "-"); idx >= 0 {
+		return infraID[idx+1:]
+	}
+	return infraID
+}
+
+// sshPublicKeyFingerprint computes the MD5 fingerprint of an SSH public key
+// in the colon-separated hex format used by cloud providers.
+func sshPublicKeyFingerprint(publicKey string) (string, error) {
+	parts := strings.Fields(strings.TrimSpace(publicKey))
+	if len(parts) < 2 {
+		return "", fmt.Errorf("invalid SSH public key format")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", fmt.Errorf("failed to decode SSH public key: %w", err)
+	}
+	hash := md5.Sum(decoded)
+	fp := make([]string, len(hash))
+	for i, b := range hash {
+		fp[i] = fmt.Sprintf("%02x", b)
+	}
+	return strings.Join(fp, ":"), nil
+}
+
+// buildResourcesFromOutputs constructs a Resource slice from Pulumi stack outputs.
+func buildResourcesFromOutputs(infraID string, count int, outputs map[string]auto.OutputValue) []Resource {
+	suffix := infraSuffix(infraID)
+	resources := make([]Resource, 0, count)
+	for i := 0; i < count; i++ {
+		res := Resource{
+			Type:       "vm",
+			Name:       fmt.Sprintf("osmw-%s-%d", suffix, i),
+			SSHEnabled: true,
+			Status:     "active",
+			Metadata:   map[string]interface{}{},
+		}
+		if ipOut, ok := outputs[fmt.Sprintf("worker-%d-ip", i)]; ok {
+			res.PublicIP = fmt.Sprintf("%v", ipOut.Value)
+		}
+		if idOut, ok := outputs[fmt.Sprintf("worker-%d-id", i)]; ok {
+			res.ID = fmt.Sprintf("%v", idOut.Value)
+		}
+		resources = append(resources, res)
+	}
+	return resources
 }

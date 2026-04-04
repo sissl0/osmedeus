@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -205,6 +206,28 @@ var workflowListCmd = &cobra.Command{
 					printer.Warning("No workflows found with tags: %s", strings.Join(filterTags, ", "))
 				}
 				fmt.Println()
+				return nil
+			}
+
+			if globalJSON {
+				var jsonRows []map[string]interface{}
+				for _, r := range rows {
+					jsonRows = append(jsonRows, map[string]interface{}{
+						"name":            r.name,
+						"type":            r.wfType,
+						"description":     r.desc,
+						"required_params": r.reqParams,
+						"steps":           r.steps,
+						"tags":            r.tags,
+						"target_types":    r.targetTypes,
+						"usage":           r.usage,
+					})
+				}
+				jsonBytes, err := json.MarshalIndent(jsonRows, "", "  ")
+				if err != nil {
+					return fmt.Errorf("failed to marshal workflows: %w", err)
+				}
+				fmt.Println(string(jsonBytes))
 				return nil
 			}
 
@@ -945,6 +968,117 @@ var workflowShowCmd = &cobra.Command{
 			}
 			// Fallback to plain YAML if rendering fails
 			fmt.Println(string(content))
+			return nil
+		}
+
+		if globalJSON {
+			result := map[string]interface{}{
+				"name":        workflow.Name,
+				"kind":        string(workflow.Kind),
+				"description": workflow.Description,
+				"file_path":   workflow.FilePath,
+				"tags":        workflow.Tags,
+			}
+			if workflow.Hidden {
+				result["hidden"] = true
+			}
+			if workflow.Help != nil {
+				help := map[string]interface{}{}
+				if workflow.Help.Usage != "" {
+					help["usage"] = workflow.Help.Usage
+				}
+				if len(workflow.Help.ExampleTargets) > 0 {
+					help["example_targets"] = workflow.Help.ExampleTargets
+				}
+				if len(help) > 0 {
+					result["help"] = help
+				}
+			}
+			if len(workflow.Params) > 0 {
+				var params []map[string]interface{}
+				for _, p := range workflow.Params {
+					pm := map[string]interface{}{
+						"name":     p.Name,
+						"required": p.Required,
+					}
+					if p.DefaultString() != "" {
+						pm["default"] = p.DefaultString()
+					}
+					params = append(params, pm)
+				}
+				result["params"] = params
+			}
+			if workflow.Dependencies != nil {
+				deps := map[string]interface{}{}
+				if len(workflow.Dependencies.Variables) > 0 {
+					var vars []map[string]interface{}
+					for _, v := range workflow.Dependencies.Variables {
+						vm := map[string]interface{}{
+							"name":     v.Name,
+							"required": v.Required,
+						}
+						if v.Type != "" {
+							vm["type"] = string(v.Type)
+						}
+						vars = append(vars, vm)
+					}
+					deps["variables"] = vars
+				}
+				if len(workflow.Dependencies.TargetTypes) > 0 {
+					var types []string
+					for _, t := range workflow.Dependencies.TargetTypes {
+						types = append(types, string(t))
+					}
+					deps["target_types"] = types
+				}
+				if len(deps) > 0 {
+					result["dependencies"] = deps
+				}
+			}
+			if workflow.IsModule() && len(workflow.Steps) > 0 {
+				var steps []map[string]interface{}
+				for _, s := range workflow.Steps {
+					steps = append(steps, map[string]interface{}{
+						"name": s.Name,
+						"type": string(s.Type),
+					})
+				}
+				result["steps"] = steps
+			}
+			if workflow.IsFlow() && len(workflow.Modules) > 0 {
+				var modules []map[string]interface{}
+				for _, m := range workflow.Modules {
+					mm := map[string]interface{}{
+						"name": m.Name,
+						"path": m.Path,
+					}
+					if len(m.DependsOn) > 0 {
+						mm["depends_on"] = m.DependsOn
+					}
+					modules = append(modules, mm)
+				}
+				result["modules"] = modules
+			}
+			if len(workflow.Triggers) > 0 {
+				var triggers []map[string]interface{}
+				for _, t := range workflow.Triggers {
+					triggers = append(triggers, map[string]interface{}{
+						"name":    t.Name,
+						"type":    string(t.On),
+						"enabled": t.Enabled,
+					})
+				}
+				result["triggers"] = triggers
+			}
+			if workflow.Runner != "" {
+				result["runner"] = string(workflow.Runner)
+			}
+
+			jsonBytes, err := json.MarshalIndent(result, "", "  ")
+			if err != nil {
+				return fmt.Errorf("failed to marshal workflow: %w", err)
+			}
+			fmt.Println(string(jsonBytes))
 			return nil
 		}
 

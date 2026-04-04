@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/pulumi/pulumi/sdk/v3/go/auto"
+	"github.com/pulumi/pulumi/sdk/v3/go/auto/optdestroy"
 	"github.com/pulumi/pulumi/sdk/v3/go/auto/optup"
 	"github.com/pulumi/pulumi/sdk/v3/go/pulumi"
 )
@@ -16,6 +17,7 @@ import (
 type PulumiManager struct {
 	projectName string
 	stackName   string
+	statePath   string
 	workspace   auto.Workspace
 	stack       auto.Stack
 }
@@ -32,34 +34,33 @@ func NewPulumiManager(projectName, stackName, statePath string) (*PulumiManager,
 		return nil, fmt.Errorf("failed to create state directory: %w", err)
 	}
 
-	ctx := context.Background()
-
-	// Create workspace with local backend
-	ws, err := auto.NewLocalWorkspace(ctx,
-		auto.WorkDir(statePath),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Pulumi workspace: %w", err)
+	// Set passphrase for local secrets encryption if not already set.
+	// Pulumi requires this for its local backend to encrypt config secrets.
+	if os.Getenv("PULUMI_CONFIG_PASSPHRASE") == "" && os.Getenv("PULUMI_CONFIG_PASSPHRASE_FILE") == "" {
+		_ = os.Setenv("PULUMI_CONFIG_PASSPHRASE", "")
 	}
 
-	// Initialize stack with inline program
+	ctx := context.Background()
+
+	// Use file:// backend pointing at the state directory
+	backendURL := fmt.Sprintf("file://%s", statePath)
+
+	// Initialize stack with inline program and explicit local backend
 	stack, err := auto.UpsertStackInlineSource(ctx, stackName, projectName, func(ctx *pulumi.Context) error {
-		// Placeholder program - will be replaced by provider-specific logic
 		return nil
-	})
+	}, auto.EnvVars(map[string]string{
+		"PULUMI_BACKEND_URL":        backendURL,
+		"PULUMI_CONFIG_PASSPHRASE":  os.Getenv("PULUMI_CONFIG_PASSPHRASE"),
+	}))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create stack: %w", err)
 	}
 
-	// Set workspace for stack
-	stack.Workspace().SetProgram(func(ctx *pulumi.Context) error {
-		return nil
-	})
-
 	return &PulumiManager{
 		projectName: projectName,
 		stackName:   stackName,
-		workspace:   ws,
+		statePath:   statePath,
+		workspace:   stack.Workspace(),
 		stack:       stack,
 	}, nil
 }
@@ -72,8 +73,10 @@ func (pm *PulumiManager) Up(ctx context.Context, program pulumi.RunFunc) error {
 	// Set stack configuration if needed
 	// This can be extended to set provider-specific config
 
-	// Run pulumi up with progress streaming
-	_, err := pm.stack.Up(ctx, optup.ProgressStreams(os.Stdout))
+	// Run pulumi up with colorized progress streaming
+	pw := NewPulumiWriter()
+	_, err := pm.stack.Up(ctx, optup.ProgressStreams(pw))
+	pw.Flush()
 	if err != nil {
 		return fmt.Errorf("failed to provision infrastructure: %w", err)
 	}
@@ -81,19 +84,42 @@ func (pm *PulumiManager) Up(ctx context.Context, program pulumi.RunFunc) error {
 	return nil
 }
 
-// Destroy tears down the infrastructure
+// Destroy tears down the infrastructure and removes the stack and its state
 func (pm *PulumiManager) Destroy(ctx context.Context) error {
-	_, err := pm.stack.Destroy(ctx)
+	pw := NewPulumiWriter()
+	_, err := pm.stack.Destroy(ctx, optdestroy.ProgressStreams(pw))
+	pw.Flush()
 	if err != nil {
 		return fmt.Errorf("failed to destroy infrastructure: %w", err)
 	}
 
-	// Remove stack after successful destroy
+	// Remove stack history and configuration after successful destroy
 	if err := pm.stack.Workspace().RemoveStack(ctx, pm.stackName); err != nil {
 		return fmt.Errorf("failed to remove stack: %w", err)
 	}
 
+	// Clean up leftover Pulumi state directory for this stack
+	pm.cleanupStackState()
+
 	return nil
+}
+
+// cleanupStackState removes leftover Pulumi local backend files for the stack
+func (pm *PulumiManager) cleanupStackState() {
+	statePath := pm.statePath
+
+	// Remove stack-specific state files from the local backend
+	stackDir := filepath.Join(statePath, ".pulumi", "stacks", pm.projectName)
+	stackFile := filepath.Join(stackDir, pm.stackName+".json")
+	_ = os.Remove(stackFile)
+	stackFileBak := filepath.Join(stackDir, pm.stackName+".json.bak")
+	_ = os.Remove(stackFileBak)
+
+	// Remove the project directory if empty
+	entries, err := os.ReadDir(stackDir)
+	if err == nil && len(entries) == 0 {
+		_ = os.Remove(stackDir)
+	}
 }
 
 // GetOutputs retrieves the stack outputs (IPs, IDs, etc.)
@@ -103,6 +129,14 @@ func (pm *PulumiManager) GetOutputs(ctx context.Context) (map[string]auto.Output
 		return nil, fmt.Errorf("failed to get stack outputs: %w", err)
 	}
 	return outputs, nil
+}
+
+// SetConfig sets a Pulumi stack configuration value
+func (pm *PulumiManager) SetConfig(ctx context.Context, key, value string, secret bool) error {
+	return pm.stack.SetConfig(ctx, key, auto.ConfigValue{
+		Value:  value,
+		Secret: secret,
+	})
 }
 
 // GetStackName returns the stack name

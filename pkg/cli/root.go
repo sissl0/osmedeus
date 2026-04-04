@@ -298,7 +298,9 @@ func init() {
 	// Set custom help function to show banner before help
 	defaultHelpFunc := rootCmd.HelpFunc()
 	rootCmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
-		fmt.Print(terminal.Banner())
+		if cmd == rootCmd {
+			fmt.Print(terminal.Banner())
+		}
 		defaultHelpFunc(cmd, args)
 	})
 

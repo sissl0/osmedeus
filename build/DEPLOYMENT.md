@@ -347,6 +347,105 @@ docker run --rm \
   alpine tar czf /backup/workspaces-backup.tar.gz /data
 ```
 
+## Ansible Deployment
+
+Deploy Osmedeus on Ubuntu/Debian servers using Ansible. Uses the official install script, SQLite storage, and no Redis — designed for simple single-host setups.
+
+### Prerequisites
+
+- **Control machine**: Ansible 2.12+
+- **Target server**: Ubuntu 20.04+ or Debian 11+
+- SSH access with root or sudo privileges
+
+### Quick Start
+
+```bash
+cd build/infra
+
+# 1. Copy and edit inventory
+cp inventory.example.ini inventory.ini
+# Edit inventory.ini with your server IP/hostname
+
+# 2. Deploy with secure credentials
+ansible-playbook -i inventory.ini deploy.yaml \
+  -e osm_admin_password=YourSecurePassword \
+  -e osm_jwt_secret=$(openssl rand -base64 32)
+
+# 3. Dry run (preview changes without applying)
+ansible-playbook -i inventory.ini deploy.yaml --check
+```
+
+### What It Does
+
+1. Installs system dependencies (curl, tmux, git, chromium, etc.)
+2. Installs Osmedeus via `curl -fsSL https://www.osmedeus.org/install.sh | bash`
+3. Deploys `osm-settings.yaml` configured with SQLite (no Redis)
+4. Runs `osmedeus health` to verify the installation
+5. Sets up a systemd service for auto-start on boot
+
+### Playbook Files
+
+```
+build/infra/
+├── deploy.yaml                 # Main playbook
+├── inventory.example.ini       # Example inventory
+└── templates/
+    ├── osm-settings.yaml.j2   # Settings config template
+    └── osmedeus.service.j2    # Systemd unit template
+```
+
+### Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `osm_server_port` | `8002` | API server port |
+| `osm_admin_user` | `admin` | Admin username |
+| `osm_admin_password` | `CHANGE_ME_ADMIN_PASSWORD` | Admin password |
+| `osm_jwt_secret` | `CHANGE_ME_JWT_SECRET_MIN_32_CHARS` | JWT signing secret |
+| `osm_jwt_expiration_minutes` | `1440` | Token expiry (24h) |
+| `osm_threads_aggressive` | `50` | Aggressive scan threads |
+| `osm_threads_default` | `20` | Default scan threads |
+| `osm_threads_gently` | `5` | Gentle scan threads |
+| `osm_enable_service` | `true` | Install systemd service |
+| `osm_telegram_enabled` | `false` | Enable Telegram notifications |
+| `osm_telegram_bot_token` | `""` | Telegram bot token |
+| `osm_telegram_chat_id` | `""` | Telegram chat ID |
+| `osm_global_variables` | `[]` | Extra env vars for workflows |
+
+### Customization
+
+Override any variable at deploy time with `-e`:
+
+```bash
+# Custom port and thread settings
+ansible-playbook -i inventory.ini deploy.yaml \
+  -e osm_server_port=9090 \
+  -e osm_threads_default=30
+
+# With Telegram notifications
+ansible-playbook -i inventory.ini deploy.yaml \
+  -e osm_telegram_enabled=true \
+  -e osm_telegram_bot_token=your_bot_token \
+  -e osm_telegram_chat_id=your_chat_id
+
+# Skip systemd service setup
+ansible-playbook -i inventory.ini deploy.yaml \
+  -e osm_enable_service=false
+```
+
+### Post-Deployment
+
+```bash
+# Check service status
+ssh root@YOUR_SERVER systemctl status osmedeus
+
+# Run a scan
+ssh root@YOUR_SERVER osmedeus run -f general -t example.com
+
+# View logs
+ssh root@YOUR_SERVER journalctl -u osmedeus -f
+```
+
 ## Troubleshooting
 
 ### Common Issues

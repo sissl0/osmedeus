@@ -102,6 +102,14 @@ curl -X POST http://localhost:8002/osm/api/runs \
 | `docker_image` | string | No | - | Docker image for docker runner |
 | `ssh_host` | string | No | - | SSH host for ssh runner |
 | `workspace` | string | No | auto | Custom workspace name |
+| `run_mode` | string | No | `local` | Execution mode: `local`, `distributed`, `cloud` |
+| `cloud_provider` | string | No | config default | Cloud provider: `aws`, `gcp`, `digitalocean`, `linode`, `azure`, `hetzner` |
+| `cloud_instances` | int | No | 1 | Number of cloud instances to provision |
+| `cloud_instance_type` | string | No | provider default | Instance size override (e.g., `t3.medium`, `s-2vcpu-4gb`) |
+| `cloud_region` | string | No | provider default | Region override |
+| `cloud_auto_destroy` | bool | No | `false` | Destroy cloud infrastructure when scan completes |
+| `cloud_reuse_infra` | string | No | - | Existing infrastructure ID to reuse instead of provisioning |
+| `cloud_use_spot` | bool | No | `false` | Use spot/preemptible instances for cost savings |
 
 \* One of `flow` or `module` is required.
 \** One of `target`, `targets`, or `target_file` is required.
@@ -115,6 +123,7 @@ curl -X POST http://localhost:8002/osm/api/runs \
   "target": "example.com",
   "target_count": 1,
   "priority": "normal",
+  "run_mode": "local",
   "job_id": "a1b2c3d4",
   "run_uuid": "550e8400-e29b-41d4-a716-446655440000",
   "status": "queued",
@@ -175,6 +184,169 @@ curl -X POST http://localhost:8002/osm/api/runs \
 ```
 
 This is similar to CLI's `-T` flag: `osmedeus run -m port-scan -T targets.txt`
+
+---
+
+## Distributed Mode
+
+Submit scans to the distributed worker pool. Requires the server to be started with `--master` flag.
+
+**Single target distributed scan:**
+```bash
+curl -X POST http://localhost:8002/osm/api/runs \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "flow": "subdomain-enum",
+    "target": "example.com",
+    "run_mode": "distributed"
+  }'
+```
+
+**Multiple targets distributed across workers:**
+```bash
+curl -X POST http://localhost:8002/osm/api/runs \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "flow": "subdomain-enum",
+    "targets": ["example.com", "test.com", "demo.com"],
+    "run_mode": "distributed",
+    "priority": "high"
+  }'
+```
+
+Each target is submitted as a separate task to the distributed worker queue. Workers pick up tasks and execute them independently.
+
+**Response:**
+```json
+{
+  "message": "Run started",
+  "workflow": "subdomain-enum",
+  "kind": "flow",
+  "target_count": 3,
+  "targets": ["example.com", "test.com", "demo.com"],
+  "priority": "high",
+  "run_mode": "distributed",
+  "job_id": "c3d4e5f6",
+  "status": "queued",
+  "poll_url": "/osm/api/jobs/c3d4e5f6"
+}
+```
+
+**Error when server is not in master mode:**
+```json
+{
+  "error": true,
+  "message": "Distributed mode requires the server to be started with --master flag"
+}
+```
+
+---
+
+## Cloud Mode
+
+Provision cloud infrastructure and execute scans on remote instances. Requires cloud features to be enabled in the configuration (`cloud.enabled: true` in `osm-settings.yaml`).
+
+**Basic cloud scan (uses default provider from config):**
+```bash
+curl -X POST http://localhost:8002/osm/api/runs \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "flow": "subdomain-enum",
+    "target": "example.com",
+    "run_mode": "cloud"
+  }'
+```
+
+**Cloud scan with multiple instances:**
+```bash
+curl -X POST http://localhost:8002/osm/api/runs \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "flow": "subdomain-enum",
+    "targets": ["example.com", "test.com", "demo.com"],
+    "run_mode": "cloud",
+    "cloud_provider": "digitalocean",
+    "cloud_instances": 3,
+    "cloud_auto_destroy": true
+  }'
+```
+
+Targets are distributed round-robin across the provisioned instances. When `cloud_auto_destroy` is `true`, infrastructure is torn down after all scans complete.
+
+**Cloud scan with instance customization:**
+```bash
+curl -X POST http://localhost:8002/osm/api/runs \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "flow": "general",
+    "target": "example.com",
+    "run_mode": "cloud",
+    "cloud_provider": "aws",
+    "cloud_instances": 2,
+    "cloud_instance_type": "t3.large",
+    "cloud_region": "ap-southeast-1",
+    "cloud_use_spot": true,
+    "cloud_auto_destroy": true,
+    "priority": "high"
+  }'
+```
+
+**Cloud scan reusing existing infrastructure:**
+```bash
+curl -X POST http://localhost:8002/osm/api/runs \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "flow": "subdomain-enum",
+    "target": "example.com",
+    "run_mode": "cloud",
+    "cloud_reuse_infra": "a1b2c3d4"
+  }'
+```
+
+Skip provisioning and run on existing infrastructure by passing the `cloud_reuse_infra` ID (from a previous `POST /cloud/instances` or cloud run response).
+
+**Response:**
+```json
+{
+  "message": "Run started",
+  "workflow": "subdomain-enum",
+  "kind": "flow",
+  "target": "example.com",
+  "target_count": 1,
+  "priority": "high",
+  "run_mode": "cloud",
+  "job_id": "d4e5f6a7",
+  "run_uuid": "770e8400-e29b-41d4-a716-446655440000",
+  "status": "queued",
+  "poll_url": "/osm/api/jobs/d4e5f6a7",
+  "infra_id": "d4e5f6a7",
+  "infra_status_url": "/osm/api/cloud/instances/d4e5f6a7/status",
+  "cloud_provider": "aws",
+  "cloud_instances": 2
+}
+```
+
+**Error when cloud is not enabled:**
+```json
+{
+  "error": true,
+  "message": "Cloud mode requires cloud features to be enabled in configuration"
+}
+```
+
+**Error when provider credentials are invalid:**
+```json
+{
+  "error": true,
+  "message": "Cloud provider validation failed: invalid API token"
+}
+```
 
 ---
 

@@ -1,0 +1,53 @@
+kind: module
+name: test-agent-sdk-session
+description: Test agent-sdk session persistence and resumption (claude-code)
+tags: test,agent-sdk,session
+
+params:
+  - name: target
+    required: true
+    default: example.com
+
+steps:
+  # First turn: start a new session
+  - name: sdk-session-start
+    type: agent-sdk
+    log: "Starting new agent session for {{Target}}"
+    agent: claude-code
+    cwd: "{{Output}}"
+    sdk_config:
+      model: "sonnet"
+      max_turns: 5
+    messages:
+      - role: system
+        content: "You are a security analyst. Remember context across turns."
+      - role: user
+        content: "Remember this target: {{Target}}. Reply with OK and the target name."
+    exports:
+      first_output: "{{sdk_output}}"
+      session_id: "{{sdk_session_id}}"
+
+  - name: show-session
+    type: bash
+    log: "Session established"
+    command: echo "Session {{session_id}} - {{first_output}}"
+
+  # Second turn: resume the previous session
+  - name: sdk-session-resume
+    type: agent-sdk
+    log: "Resuming agent session {{session_id}}"
+    agent: claude-code
+    cwd: "{{Output}}"
+    sdk_config:
+      model: "sonnet"
+      session_resume: "{{session_id}}"
+    messages:
+      - role: user
+        content: "What target did I tell you to remember?"
+    exports:
+      resumed_output: "{{sdk_output}}"
+
+  - name: verify-resume
+    type: bash
+    log: "Session resume result"
+    command: echo "Resumed session said - {{resumed_output}}"

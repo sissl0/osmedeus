@@ -17,6 +17,7 @@ type Providers struct {
 	DigitalOcean DigitalOceanConfig `yaml:"digitalocean"`
 	Linode       LinodeConfig       `yaml:"linode"`
 	Azure        AzureConfig        `yaml:"azure"`
+	Hetzner      HetznerConfig      `yaml:"hetzner"`
 }
 
 // AWSConfig contains AWS credentials and configuration
@@ -26,6 +27,7 @@ type AWSConfig struct {
 	Region          string `yaml:"region"`
 	InstanceType    string `yaml:"instance_type"`
 	AMI             string `yaml:"ami"`
+	AMIFilter       string `yaml:"ami_filter"`
 	UseSpot         bool   `yaml:"use_spot"`
 }
 
@@ -71,6 +73,15 @@ type AzureConfig struct {
 	ImageReference string `yaml:"image_reference"`
 }
 
+// HetznerConfig contains Hetzner Cloud credentials and configuration
+type HetznerConfig struct {
+	Token      string `yaml:"token"`
+	Location   string `yaml:"location"`
+	ServerType string `yaml:"server_type"`
+	Image      string `yaml:"image"`
+	SSHKeyName string `yaml:"ssh_key_name"`
+}
+
 // Defaults contains default cloud configuration values
 type Defaults struct {
 	Provider         string `yaml:"provider"`
@@ -101,11 +112,24 @@ type SSH struct {
 	PublicKeyPath     string `yaml:"public_key_path"`
 	PublicKeyContent  string `yaml:"public_key_content"`
 	User              string `yaml:"user"`
+	Password          string `yaml:"password"`
+	Port              string `yaml:"port"`
 }
 
 // Setup contains worker setup configuration
 type Setup struct {
-	Commands []string `yaml:"commands"`
+	Commands     []string     `yaml:"commands"`
+	PostCommands []string     `yaml:"post_commands"`
+	Ansible      AnsibleSetup `yaml:"ansible"`
+}
+
+// AnsibleSetup contains ansible playbook configuration for worker setup
+type AnsibleSetup struct {
+	Enabled       bool              `yaml:"enabled"`
+	PlaybookPath  string            `yaml:"playbook_path"`
+	InventoryPath string            `yaml:"inventory_path"`
+	ExtraVars     map[string]string `yaml:"extra_vars"`
+	ExtraArgs     string            `yaml:"extra_args"`
 }
 
 // DefaultCloudConfigs returns a default cloud configuration
@@ -117,6 +141,7 @@ func DefaultCloudConfigs() *CloudConfigs {
 				SecretAccessKey: "${AWS_SECRET_ACCESS_KEY}",
 				Region:          "us-east-1",
 				InstanceType:    "t3.medium",
+				AMIFilter:       "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*",
 				UseSpot:         false,
 			},
 			GCP: GCPConfig{
@@ -147,6 +172,12 @@ func DefaultCloudConfigs() *CloudConfigs {
 				Location:       "eastus",
 				VMSize:         "Standard_B2s",
 			},
+			Hetzner: HetznerConfig{
+				Token:      "${HETZNER_TOKEN}",
+				Location:   "nbg1",
+				ServerType: "cx22",
+				Image:      "ubuntu-22.04",
+			},
 		},
 		Defaults: Defaults{
 			Provider:         "digitalocean",
@@ -172,6 +203,11 @@ func DefaultCloudConfigs() *CloudConfigs {
 		Setup: Setup{
 			Commands: []string{
 				"# Add custom setup commands here",
+			},
+			Ansible: AnsibleSetup{
+				Enabled:       false,
+				PlaybookPath:  "{{base_folder}}/cloud-infra/setup-playbook.yaml",
+				InventoryPath: "{{base_folder}}/cloud-infra/inventory.ini",
 			},
 		},
 	}

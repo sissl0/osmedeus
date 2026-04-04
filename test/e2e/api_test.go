@@ -648,7 +648,7 @@ func testRunEndpoints(t *testing.T, log *TestLogger) {
 
 	// ===== CREATE RUN - ALL PRIORITIES =====
 	log.Info("Testing POST /osm/api/runs with all priority levels")
-	priorities := []string{"low", "normal", "high", "critical"}
+	priorities := []string{"low", "normal", "medium", "high", "critical"}
 	for _, priority := range priorities {
 		runReq := map[string]interface{}{
 			"module":   "test-bash",

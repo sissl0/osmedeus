@@ -285,7 +285,7 @@ func (s *Server) setupRoutes() {
 	api.Get("/workflows/:name", handlers.GetWorkflowVerbose(s.config))
 
 	// Runs
-	api.Post("/runs", handlers.CreateRun(s.config))
+	api.Post("/runs", handlers.CreateRun(s.config, s.options.Master))
 	api.Get("/runs", handlers.ListRuns(s.config))
 	api.Get("/runs/:id", handlers.GetRun(s.config))
 	api.Delete("/runs/:id", handlers.CancelRun(s.config))
@@ -385,6 +385,16 @@ func (s *Server) setupRoutes() {
 		api.Get("/tasks/:id", handlers.GetTask(s.options.Master))
 		api.Post("/tasks", handlers.SubmitTask(s.options.Master))
 	}
+
+	// Cloud infrastructure endpoints
+	api.Get("/cloud/providers", handlers.ListCloudProviders(s.config))
+	api.Post("/cloud/providers/:name/validate", handlers.ValidateCloudProvider(s.config))
+	api.Post("/cloud/instances", handlers.CreateCloudInstances(s.config))
+	api.Get("/cloud/instances", handlers.ListCloudInstances(s.config))
+	api.Get("/cloud/instances/:id", handlers.GetCloudInstance(s.config))
+	api.Get("/cloud/instances/:id/status", handlers.GetCloudInstanceStatus(s.config))
+	api.Delete("/cloud/instances/:id", handlers.DestroyCloudInstance(s.config))
+	api.Post("/cloud/estimate", handlers.EstimateCloudCost(s.config))
 
 	// Event receiver endpoints (only available when event receiver is enabled)
 	if s.eventReceiver != nil {

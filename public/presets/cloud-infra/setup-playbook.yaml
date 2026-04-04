@@ -1,0 +1,133 @@
+---
+# Osmedeus Worker Setup Playbook
+# This playbook installs osmedeus and its dependencies on cloud workers.
+# Customize this file to fit your setup needs.
+#
+# Usage:
+#   ansible-playbook -i inventory.ini setup-playbook.yaml
+#
+# This playbook is auto-run by `osmedeus cloud run` when ansible is enabled
+# in cloud-settings.yaml:
+#   setup:
+#     ansible:
+#       enabled: true
+
+- name: Setup Osmedeus Workers
+  hosts: osmedeus_workers
+  become: yes
+  gather_facts: yes
+
+  vars:
+    osmedeus_user: "{{ ansible_user }}"
+    osmedeus_home: "/home/{{ osmedeus_user }}"
+    osmedeus_base: "{{ osmedeus_home }}/osmedeus-base"
+    osmedeus_bin: "{{ osmedeus_home }}/.local/bin"
+    # Override these via cloud-settings.yaml extra_vars
+    osmedeus_version: "latest"
+    install_optional_binaries: false
+
+  tasks:
+    # ---------------------------------------------------------------
+    # System Dependencies
+    # ---------------------------------------------------------------
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install system dependencies
+      apt:
+        name:
+          - curl
+          - git
+          - tmux
+          - unzip
+          - jq
+          - build-essential
+          - chromium-browser
+        state: present
+
+    # ---------------------------------------------------------------
+    # Install Osmedeus
+    # ---------------------------------------------------------------
+    - name: Check if osmedeus is already installed
+      stat:
+        path: "{{ osmedeus_bin }}/osmedeus"
+      register: osmedeus_binary
+
+    - name: Install osmedeus CLI
+      become_user: "{{ osmedeus_user }}"
+      shell: |
+        curl -fsSL https://www.osmedeus.org/install.sh | bash
+      args:
+        creates: "{{ osmedeus_bin }}/osmedeus"
+      environment:
+        HOME: "{{ osmedeus_home }}"
+        PATH: "{{ osmedeus_bin }}:{{ osmedeus_home }}/go/bin:/usr/local/go/bin:{{ ansible_env.PATH }}"
+
+    # ---------------------------------------------------------------
+    # Install Base & Workflows
+    # ---------------------------------------------------------------
+    - name: Check if osmedeus base exists
+      stat:
+        path: "{{ osmedeus_base }}/workflows"
+      register: osmedeus_base_dir
+
+    - name: Install osmedeus base and workflows
+      become_user: "{{ osmedeus_user }}"
+      shell: |
+        export PATH="{{ osmedeus_bin }}:{{ osmedeus_home }}/go/bin:/usr/local/go/bin:$PATH"
+        osmedeus install base --preset
+      when: not osmedeus_base_dir.stat.exists
+      environment:
+        HOME: "{{ osmedeus_home }}"
+
+    # ---------------------------------------------------------------
+    # Install Security Binaries
+    # ---------------------------------------------------------------
+    - name: Install osmedeus binaries
+      become_user: "{{ osmedeus_user }}"
+      shell: |
+        export PATH="{{ osmedeus_bin }}:{{ osmedeus_base }}/external-binaries:{{ osmedeus_home }}/go/bin:/usr/local/go/bin:$PATH"
+        osmedeus install binary --all {{ '--install-optional' if install_optional_binaries else '' }}
+      environment:
+        HOME: "{{ osmedeus_home }}"
+
+    - name: Configure PATH in bashrc
+      become_user: "{{ osmedeus_user }}"
+      shell: |
+        export PATH="{{ osmedeus_bin }}:{{ osmedeus_base }}/external-binaries:{{ osmedeus_home }}/go/bin:/usr/local/go/bin:$PATH"
+        osmedeus install env
+      environment:
+        HOME: "{{ osmedeus_home }}"
+
+    # ---------------------------------------------------------------
+    # Verify Installation
+    # ---------------------------------------------------------------
+    - name: Verify osmedeus installation
+      become_user: "{{ osmedeus_user }}"
+      shell: |
+        export PATH="{{ osmedeus_bin }}:{{ osmedeus_base }}/external-binaries:{{ osmedeus_home }}/go/bin:/usr/local/go/bin:$PATH"
+        osmedeus --version
+      register: osmedeus_version_output
+      environment:
+        HOME: "{{ osmedeus_home }}"
+
+    - name: Display osmedeus version
+      debug:
+        msg: "Osmedeus installed: {{ osmedeus_version_output.stdout }}"
+
+    - name: Run osmedeus health check
+      become_user: "{{ osmedeus_user }}"
+      shell: |
+        export PATH="{{ osmedeus_bin }}:{{ osmedeus_base }}/external-binaries:{{ osmedeus_home }}/go/bin:/usr/local/go/bin:$PATH"
+        osmedeus health
+      register: health_output
+      ignore_errors: yes
+      environment:
+        HOME: "{{ osmedeus_home }}"
+
+    - name: Display health check result
+      debug:
+        msg: "{{ health_output.stdout_lines[-5:] }}"
+      when: health_output.stdout_lines | length > 0

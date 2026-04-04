@@ -122,6 +122,7 @@ func NewStepDispatcherWithConfig(cfg StepDispatcherConfig) *StepDispatcher {
 	d.registry.Register(d.llmExecutor)
 	d.registry.Register(d.agentExecutor)
 	d.registry.Register(NewACPExecutor(engine))
+	d.registry.Register(NewSDKExecutor(engine))
 
 	return d
 }
@@ -332,6 +333,21 @@ func collectRenderRequests(step *core.Step) []template.RenderRequest {
 		}
 		for k, v := range step.ACPConfig.Env {
 			add(fmt.Sprintf("ACPConfig.Env[%s]", k), v)
+		}
+	}
+
+	// Agent-SDK step fields
+	if step.SDKConfig != nil {
+		add("SDKConfig.Model", step.SDKConfig.Model)
+		add("SDKConfig.PermissionMode", step.SDKConfig.PermissionMode)
+		add("SDKConfig.Sandbox", step.SDKConfig.Sandbox)
+		add("SDKConfig.Strategy", step.SDKConfig.Strategy)
+		add("SDKConfig.SessionResume", step.SDKConfig.SessionResume)
+		for k, v := range step.SDKConfig.Env {
+			add(fmt.Sprintf("SDKConfig.Env[%s]", k), v)
+		}
+		for i, a := range step.SDKConfig.Agents {
+			add(fmt.Sprintf("SDKConfig.Agents[%d]", i), a)
 		}
 	}
 
@@ -562,6 +578,39 @@ func (d *StepDispatcher) renderStepBatch(step *core.Step, vars map[string]any) (
 			}
 		}
 		rendered.ACPConfig = &cfg
+	}
+
+	// Agent-SDK step fields
+	if step.SDKConfig != nil {
+		cfg := *step.SDKConfig
+		if v := get("SDKConfig.Model"); v != "" {
+			cfg.Model = v
+		}
+		if v := get("SDKConfig.PermissionMode"); v != "" {
+			cfg.PermissionMode = v
+		}
+		if v := get("SDKConfig.Sandbox"); v != "" {
+			cfg.Sandbox = v
+		}
+		if v := get("SDKConfig.Strategy"); v != "" {
+			cfg.Strategy = v
+		}
+		if v := get("SDKConfig.SessionResume"); v != "" {
+			cfg.SessionResume = v
+		}
+		if len(step.SDKConfig.Env) > 0 {
+			cfg.Env = make(map[string]string, len(step.SDKConfig.Env))
+			for k := range step.SDKConfig.Env {
+				cfg.Env[k] = get(fmt.Sprintf("SDKConfig.Env[%s]", k))
+			}
+		}
+		if len(step.SDKConfig.Agents) > 0 {
+			cfg.Agents = make([]string, len(step.SDKConfig.Agents))
+			for i := range step.SDKConfig.Agents {
+				cfg.Agents[i] = get(fmt.Sprintf("SDKConfig.Agents[%d]", i))
+			}
+		}
+		rendered.SDKConfig = &cfg
 	}
 
 	// Apply results to slice fields

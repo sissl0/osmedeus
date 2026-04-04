@@ -12,7 +12,20 @@ providers:
     secret_access_key: "${AWS_SECRET_ACCESS_KEY}"
     region: "us-east-1"
     instance_type: "t3.medium"
-    ami: ""  # Leave empty to use default Ubuntu AMI
+    # AMI ID for the worker instances.
+    # Leave empty to auto-select using ami_filter below.
+    # To find AMIs: https://cloud-images.ubuntu.com/locator/ec2/
+    # Or via AWS CLI: aws ec2 describe-images --owners 099720109477 \
+    #   --filters "Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*" \
+    #   --query 'Images | sort_by(@, &CreationDate) | [-1].ImageId' --region <your-region>
+    ami: ""
+    # AMI name filter for auto-lookup when ami is empty.
+    # Default: latest Ubuntu 24.04 LTS. Change to use a different OS:
+    #   Ubuntu 22.04: "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"
+    #   Ubuntu 24.04: "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"
+    #   Debian 12:    "debian-12-amd64-*"
+    #   Amazon Linux: "al2023-ami-*-x86_64"
+    ami_filter: "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"
     use_spot: false
 
   # Google Cloud Platform Configuration
@@ -52,6 +65,29 @@ providers:
     location: "eastus"
     vm_size: "Standard_B2s"
     image_reference: "Canonical:UbuntuServer:22.04-LTS:latest"
+
+  # Hetzner Cloud Configuration
+  hetzner:
+    token: "${HETZNER_TOKEN}"
+    location: "hel1"  # Helsinki, Finland (recommended for cx23)
+    server_type: "cx23"  # 2 vCPU, 4GB RAM (current generation)
+    image: "ubuntu-22.04"
+    ssh_key_name: ""  # Name of SSH key registered in Hetzner
+    #
+    # Available locations:
+    #   hel1 (Helsinki)  fsn1 (Falkenstein)  nbg1 (Nuremberg)
+    #   ash (Ashburn)    hil (Hillsboro)     sin (Singapore)
+    #   Note: not all server types are available in every location.
+    #
+    # Server types (current generation):
+    #   Cost-optimized (shared x86):  cx23, cx33, cx43, cx53
+    #   Cost-optimized (shared ARM):  cax11, cax21, cax31, cax41
+    #   Shared AMD:                   cpx11, cpx21, cpx31, cpx41, cpx51
+    #   Dedicated CPU:                ccx13, ccx23, ccx33, ccx43, ccx53, ccx63
+    #
+    # List available types via API:
+    #   curl -s -H "Authorization: Bearer $HETZNER_TOKEN" \
+    #     https://api.hetzner.cloud/v1/server_types | jq '.server_types[].name'
 
 # =============================================================================
 # Default Settings
@@ -119,15 +155,63 @@ ssh:
   # SSH username (default: root for most cloud VMs)
   user: "root"
 
+  # SSH password — STRONGLY ADVISED NOT TO USE.
+  # Key-based authentication is far more secure. Only use this for ad-hoc
+  # machines that don't have key-based auth configured.
+  # Uses sshpass under the hood (must be installed: brew install sshpass / apt install sshpass)
+  password: ""
+
+  # SSH port (default: 22)
+  port: ""
+
 # =============================================================================
 # Worker Setup Commands
 # =============================================================================
-# Additional commands to run on worker boot (after osmedeus installation)
+# Commands to run on each worker via SSH before starting scans.
+# You have full control — add whatever install/config steps you need.
 setup:
   commands:
-    - "# Install additional tools"
-    - "# apt-get update && apt-get install -y <tool>"
-    - "# Configure worker-specific settings"
+    - "# Example: install osmedeus and tools"
+    - "# sudo apt-get update && sudo apt-get install -y curl git tmux unzip jq"
+    - "# curl -fsSL https://www.osmedeus.org/install.sh | bash"
+    - "# export PATH=$HOME/.local/bin:$PATH && osmedeus install base --preset"
+    - "# export PATH=$HOME/.local/bin:$PATH && osmedeus install binary --all"
+
+  # Post-setup commands run after setup.commands complete.
+  # Template variables are expanded per-worker:
+  #   {{public_ip}}    - Worker's public IP address
+  #   {{private_ip}}   - Worker's private IP address
+  #   {{worker_name}}  - Resource name (e.g., osmw-1775159841-0)
+  #   {{worker_id}}    - Cloud resource ID (e.g., i-0437adf5...)
+  #   {{infra_id}}     - Infrastructure ID (e.g., cloud-aws-1775159841)
+  #   {{provider}}     - Provider name (e.g., aws, digitalocean)
+  #   {{ssh_user}}     - SSH username (e.g., ubuntu, root)
+  #   {{index}}        - Worker index (0, 1, 2, ...)
+  post_commands:
+    - "# Example: register as a distributed worker"
+    - "# osmedeus worker join --redis-url redis://master:6379 --alias {{worker_name}}"
+    - "# Example: notify a remote server"
+    - "# curl -s https://my-server.com/api/register?ip={{public_ip}}&name={{worker_name}}&infra={{infra_id}}"
+
+  # ---------------------------------------------------------------------------
+  # Ansible Setup (alternative to raw SSH commands)
+  # ---------------------------------------------------------------------------
+  # When enabled, runs an ansible playbook against all workers instead of
+  # setup.commands. Falls back to SSH commands if ansible fails.
+  # The inventory file is auto-generated with all worker IPs.
+  ansible:
+    enabled: false
+    # Path to the ansible playbook. A default example is provided at this path.
+    # Edit it to customize: ~/osmedeus-base/cloud-infra/setup-playbook.yaml
+    playbook_path: "{{base_folder}}/cloud-infra/setup-playbook.yaml"
+    # Path where the dynamic inventory is written (auto-generated per run)
+    inventory_path: "{{base_folder}}/cloud-infra/inventory.ini"
+    # Extra variables passed to ansible-playbook as --extra-vars
+    extra_vars: {}
+    #   osmedeus_version: "v5.0.2"
+    #   redis_url: "redis://master:6379"
+    # Additional ansible-playbook flags (e.g., "-vvv" for debug, "--tags setup")
+    extra_args: ""
 
 # =============================================================================
 # Usage Examples

@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -421,11 +422,57 @@ func runFunctionList(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(rows) == 0 {
+		if globalJSON {
+			fmt.Println("[]")
+			return nil
+		}
 		if funcSearchFilter != "" {
 			printer.Info("No functions matching '%s'", funcSearchFilter)
 		} else {
 			printer.Info("No functions available")
 		}
+		return nil
+	}
+
+	if globalJSON {
+		var jsonFuncs []map[string]string
+		// Re-iterate to build clean JSON (rows contain color codes)
+		for _, cat := range categories {
+			if funcs, ok := registry[cat.Key]; ok {
+				for _, fn := range funcs {
+					if funcSearchFilter != "" {
+						nameLower := strings.ToLower(fn.Name)
+						descLower := strings.ToLower(fn.Description)
+						catLower := strings.ToLower(cat.Title)
+						if !strings.Contains(nameLower, searchLower) &&
+							!strings.Contains(descLower, searchLower) &&
+							!strings.Contains(catLower, searchLower) {
+							continue
+						}
+					}
+					entry := map[string]string{
+						"category":    cat.ShortTitle,
+						"name":        fn.Name,
+						"signature":   fn.Signature,
+						"description": fn.Description,
+						"return_type": fn.ReturnType,
+					}
+					if fn.Example != "" {
+						entry["example"] = fn.Example
+					}
+					jsonFuncs = append(jsonFuncs, entry)
+				}
+			}
+		}
+		if jsonFuncs == nil {
+			fmt.Println("[]")
+			return nil
+		}
+		jsonBytes, err := json.MarshalIndent(jsonFuncs, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal functions: %w", err)
+		}
+		fmt.Println(string(jsonBytes))
 		return nil
 	}
 

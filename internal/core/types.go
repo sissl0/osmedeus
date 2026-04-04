@@ -27,6 +27,7 @@ const (
 	StepTypeLLM        StepType = "llm"
 	StepTypeAgent      StepType = "agent"
 	StepTypeAgentACP   StepType = "agent-acp"
+	StepTypeAgentSDK   StepType = "agent-sdk"
 )
 
 // TriggerType represents trigger types
@@ -118,6 +119,9 @@ const (
 
 // DefaultACPAgent is the default ACP agent used when none is specified.
 const DefaultACPAgent = "claude-code"
+
+// DefaultSDKAgent is the default agent-sdk agent used when none is specified.
+const DefaultSDKAgent = "claude-code"
 
 // KillProcessAndChildren kills a process and all its children using SIGKILL.
 // It first attempts to kill the entire process group (negative PID), falling

@@ -45,35 +45,54 @@ func DetectKubernetes() bool {
 	return false
 }
 
-// DetectCloudProvider detects AWS, GCP, Azure, or returns "local"
+// DetectCloudProvider detects cloud providers via DMI information.
+// Returns the provider name (e.g. "aws", "gcp"), "on-prem" if no provider
+// is detected, or "unknown" if DMI information cannot be read at all.
 func DetectCloudProvider() string {
-	// Only works on Linux - check DMI information
+	// DMI detection only works on Linux
 	if runtime.GOOS != "linux" {
-		return "local"
+		return "on-prem"
 	}
 
-	// Check sys_vendor
-	vendorPaths := []string{
+	dmiPaths := []string{
 		"/sys/class/dmi/id/sys_vendor",
 		"/sys/devices/virtual/dmi/id/bios_vendor",
+		"/sys/class/dmi/id/product_name",
+		"/sys/class/dmi/id/chassis_asset_tag",
 	}
 
-	for _, path := range vendorPaths {
+	anyReadable := false
+	for _, path := range dmiPaths {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			continue
 		}
-		vendor := strings.ToLower(strings.TrimSpace(string(data)))
+		anyReadable = true
+		value := strings.ToLower(strings.TrimSpace(string(data)))
 
 		switch {
-		case strings.Contains(vendor, "amazon"):
+		case strings.Contains(value, "amazon"):
 			return "aws"
-		case strings.Contains(vendor, "google"):
+		case strings.Contains(value, "google"):
 			return "gcp"
-		case strings.Contains(vendor, "microsoft"):
+		case strings.Contains(value, "microsoft"):
 			return "azure"
+		case strings.Contains(value, "digitalocean"):
+			return "digitalocean"
+		case strings.Contains(value, "akamai") || strings.Contains(value, "linode"):
+			return "linode"
+		case strings.Contains(value, "vultr"):
+			return "vultr"
+		case strings.Contains(value, "hetzner"):
+			return "hetzner"
+		case strings.Contains(value, "oraclecloud"):
+			return "oracle"
 		}
 	}
 
-	return "local"
+	if !anyReadable {
+		return "unknown"
+	}
+
+	return "on-prem"
 }

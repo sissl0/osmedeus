@@ -415,8 +415,32 @@ func InstallBinary(name string, registry BinaryRegistry, binariesFolder string, 
 	return downloadAndExtractBinary(name, url, binariesFolder, customHeaders)
 }
 
+// maybePrependSudo prepends "sudo" to package manager commands when not running as root.
+// This ensures commands like "apt install coreutils" work on cloud VMs where osmedeus
+// runs as an unprivileged user (e.g., ubuntu on AWS).
+func maybePrependSudo(command string) string {
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		return command
+	}
+	if os.Geteuid() == 0 {
+		return command
+	}
+	if strings.HasPrefix(command, "sudo ") {
+		return command
+	}
+	pkgManagers := []string{"apt ", "apt-get ", "dnf ", "yum ", "pacman ", "zypper ", "apk "}
+	for _, prefix := range pkgManagers {
+		if strings.HasPrefix(command, prefix) {
+			return "sudo " + command
+		}
+	}
+	return command
+}
+
 // executeCommand runs a shell command for installing a binary
 func executeCommand(command string) error {
+	command = maybePrependSudo(command)
+
 	var cmd *exec.Cmd
 	// @NOTE: This is intentional - installation commands come from the binary registry
 	// configuration which is a trusted source for binary installation procedures.

@@ -1,0 +1,54 @@
+kind: module
+name: test-agent-sdk-multi
+description: Test agent-sdk multi-agent strategies (RunFirst / RunAll)
+tags: test,agent-sdk,multi-agent
+
+params:
+  - name: target
+    required: true
+    default: example.com
+
+steps:
+  # RunFirst strategy: race multiple agents, return first success
+  - name: sdk-race
+    type: agent-sdk
+    log: "Racing claude-code vs codex for {{Target}}"
+    cwd: "{{Output}}"
+    sdk_config:
+      strategy: "first"
+      agents:
+        - claude-code
+        - codex
+    messages:
+      - role: user
+        content: "Briefly describe what {{Target}} is in one sentence."
+    exports:
+      race_result: "{{sdk_output}}"
+      race_winner: "{{sdk_agent}}"
+
+  - name: show-race-winner
+    type: bash
+    log: "Race winner"
+    command: echo "Winner {{race_winner}} said - {{race_result}}"
+
+  # RunAll strategy: run all agents concurrently, collect all results
+  - name: sdk-all
+    type: agent-sdk
+    log: "Running all agents for {{Target}}"
+    cwd: "{{Output}}"
+    sdk_config:
+      strategy: "all"
+      agents:
+        - claude-code
+        - codex
+    messages:
+      - role: user
+        content: "Give a one-line security assessment of {{Target}}."
+    exports:
+      all_results: "{{sdk_output}}"
+      all_agents: "{{sdk_agent}}"
+
+  - name: show-all-results
+    type: bash
+    log: "All agent results"
+    command: echo "Agents {{all_agents}} produced results"

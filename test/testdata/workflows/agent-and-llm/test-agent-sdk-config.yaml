@@ -1,0 +1,41 @@
+kind: module
+name: test-agent-sdk-config
+description: Test agent-sdk step with full configuration options
+tags: test,agent-sdk,config
+
+params:
+  - name: target
+    required: true
+    default: example.com
+
+steps:
+  # Agent-SDK with cwd, allowed_paths, and sdk_config
+  - name: sdk-configured
+    type: agent-sdk
+    log: "Running configured SDK agent for {{Target}}"
+    agent: claude-code
+    cwd: "{{Output}}"
+    allowed_paths:
+      - "{{Output}}"
+      - "/tmp"
+    sdk_config:
+      model: "sonnet"
+      max_turns: 10
+      env:
+        CUSTOM_VAR: "hello"
+        TARGET_DOMAIN: "{{Target}}"
+    messages:
+      - role: system
+        content: "You are a security reconnaissance agent. Be concise."
+      - role: user
+        content: "Analyze the target {{Target}} and create a summary file."
+    exports:
+      analysis: "{{sdk_output}}"
+      agent_name: "{{sdk_agent}}"
+      session: "{{sdk_session_id}}"
+
+  # Verify exports from previous step
+  - name: verify-sdk-exports
+    type: bash
+    log: "Verifying SDK exports"
+    command: echo "Agent {{agent_name}} produced output (session {{session}})"

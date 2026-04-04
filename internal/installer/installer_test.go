@@ -1,6 +1,7 @@
 package installer
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -67,6 +68,39 @@ func TestIsSubPath(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := isSubPath(tt.parent, tt.child)
 			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestMaybePrependSudo(t *testing.T) {
+	// On darwin/windows, maybePrependSudo is a no-op
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		assert.Equal(t, "apt install coreutils", maybePrependSudo("apt install coreutils"),
+			"should be no-op on darwin/windows")
+		return
+	}
+
+	tests := []struct {
+		name    string
+		input   string
+		expect  string
+	}{
+		{"apt install", "apt install coreutils", "sudo apt install coreutils"},
+		{"apt-get install", "apt-get install -y curl", "sudo apt-get install -y curl"},
+		{"dnf install", "dnf install nmap", "sudo dnf install nmap"},
+		{"yum install", "yum install git", "sudo yum install git"},
+		{"pacman install", "pacman -S nmap", "sudo pacman -S nmap"},
+		{"already has sudo", "sudo apt install coreutils", "sudo apt install coreutils"},
+		{"go install unchanged", "go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest", "go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest"},
+		{"pip unchanged", "pip install semgrep", "pip install semgrep"},
+		{"git clone unchanged", "git clone https://github.com/example/repo", "git clone https://github.com/example/repo"},
+		{"curl unchanged", "curl -fsSL https://example.com | bash", "curl -fsSL https://example.com | bash"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := maybePrependSudo(tt.input)
+			assert.Equal(t, tt.expect, result)
 		})
 	}
 }

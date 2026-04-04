@@ -155,6 +155,16 @@ test-e2e-ssh: build install-gotestsum
 	@echo "$(PREFIX) Cleaning up..."
 	docker-compose -f build/docker/docker-compose.test.yaml down -v
 
+# Cloud setup E2E tests (SSH password, key, ansible, post-commands)
+test-e2e-cloud-setup: build install-gotestsum
+	@echo "$(PREFIX) Starting SSH server for cloud setup tests..."
+	docker-compose -f build/docker/docker-compose.test.yaml up -d ssh-server
+	@sleep 5
+	@echo "$(PREFIX) Running cloud setup E2E tests..."
+	$(TESTCMD) $(TESTFLAGS) -run TestCloudSetup ./test/e2e/...
+	@echo "$(PREFIX) Cleaning up..."
+	docker-compose -f build/docker/docker-compose.test.yaml down -v
+
 # Distributed scan e2e tests (requires Docker for Redis)
 test-distributed: build install-gotestsum
 	@echo "$(PREFIX) Starting Redis for distributed tests..."

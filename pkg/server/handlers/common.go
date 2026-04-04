@@ -38,6 +38,15 @@ type CreateRunRequest struct {
 	DockerImage string `json:"docker_image,omitempty"` // Docker image to use when runner_type=docker
 	SSHHost     string `json:"ssh_host,omitempty"`     // SSH host when runner_type=ssh
 
+	// Cloud-specific options (used when run_mode=cloud)
+	CloudProvider     string `json:"cloud_provider,omitempty"`      // aws, gcp, digitalocean, linode, azure, hetzner
+	CloudInstances    int    `json:"cloud_instances,omitempty"`     // Number of cloud instances to provision
+	CloudInstanceType string `json:"cloud_instance_type,omitempty"` // Instance size override
+	CloudRegion       string `json:"cloud_region,omitempty"`        // Region override
+	CloudAutoDestroy  bool   `json:"cloud_auto_destroy,omitempty"`  // Destroy infrastructure when scan completes
+	CloudReuseInfra   string `json:"cloud_reuse_infra,omitempty"`   // Existing infrastructure ID to reuse
+	CloudUseSpot      bool   `json:"cloud_use_spot,omitempty"`      // Use spot/preemptible instances
+
 	// Scheduling options
 	Schedule         string `json:"schedule,omitempty"`           // Cron expression for scheduled scans
 	ScheduleEnabled  bool   `json:"schedule_enabled,omitempty"`   // Enable scheduled execution
@@ -171,6 +180,10 @@ func validateCreateRunInput(req *CreateRunRequest) error {
 		{"ssh_host", req.SSHHost},
 		{"docker_image", req.DockerImage},
 		{"repeat_wait_time", req.RepeatWaitTime},
+		{"cloud_provider", req.CloudProvider},
+		{"cloud_instance_type", req.CloudInstanceType},
+		{"cloud_region", req.CloudRegion},
+		{"cloud_reuse_infra", req.CloudReuseInfra},
 	}
 
 	for _, f := range fields {
