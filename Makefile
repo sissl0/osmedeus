@@ -355,7 +355,7 @@ dev-setup: install-gotestsum
 
 # Docker build
 docker-build:
-	docker build -t osmedeus:$(VERSION) .
+	docker build -t osmedeus:$(VERSION) -f build/docker/Dockerfile .
 
 # Docker run
 docker-run:
