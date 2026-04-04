@@ -29,6 +29,8 @@ This document describes the technical architecture and development practices for
 - [Canary Testing](#canary-testing)
 - [Adding New Features](#adding-new-features)
 - [CLI Shortcuts and Tips](#cli-shortcuts-and-tips)
+  - [Query Commands](#query-commands)
+  - [Cloud Setup Commands](#cloud-setup-commands)
 
 ## Project Structure
 
@@ -1797,6 +1799,7 @@ test/e2e/                                # E2E CLI tests
 ├── agent_acp_test.go                    # Agent-ACP step e2e tests
 ├── canary_test.go                       # Canary tests (real-world scans in Docker)
 ├── cloud_test.go                        # Cloud CLI e2e tests
+├── cloud_setup_test.go                  # Cloud setup e2e tests (SSH, Ansible, post-commands)
 ├── db_clean_test.go                     # Database cleanup e2e tests
 ├── hooks_test.go                        # Workflow hooks e2e tests
 └── worker_test.go                       # Worker management e2e tests
@@ -1958,6 +1961,10 @@ This is handled by the `Installer.KeepSetting` field in `internal/installer/inst
 | `OSM_PRESET_URL` | Default base repo | Override base preset source |
 | `OSM_WORKFLOW_URL` | Default workflow repo | Override workflow preset source |
 | `OSM_IGNORE_REGISTRY` | (unset) | Skip auto binary installation and binary health check |
+
+### Go Install Fallback
+
+When installing binaries via `go-getter`, if a cloned Go repository lacks a `go.mod` file, the installer falls back to `go install <package>` with `GOBIN` set to the target binaries folder. This provides resilience for packages that don't support local builds.
 
 Preset installation is useful for Docker images and CI/CD pipelines where reproducible, stable deployments from tested configurations are preferred over manual source specification.
 
@@ -2207,6 +2214,49 @@ osmedeus worker queue new -f <flow> -t <target>    # Queue a task
 osmedeus worker queue new -m <module> -T targets.txt -p key=value
 osmedeus worker queue run --concurrency 5           # Process queued tasks
 ```
+
+### Query Commands
+
+Agent-friendly database queries for vulnerabilities, runs, and steps:
+
+```bash
+# Query vulnerabilities
+osmedeus query vulns
+osmedeus query vulns --severity high --workspace example.com
+osmedeus query vulns --confidence certain --asset "api.example.com"
+
+# Query workflow runs
+osmedeus query runs
+osmedeus query runs --status running --workflow general
+osmedeus query runs --target example.com --workspace example.com
+
+# Query execution steps for a specific run
+osmedeus query steps --run <run-uuid>
+
+# Common flags (all subcommands)
+--json                  # JSON output
+--limit 100 --offset 50 # Pagination
+--where key=value       # Field filter
+--search "keyword"      # Full-text search
+```
+
+### Cloud Setup Commands
+
+Configure existing remote machines without provisioning:
+
+```bash
+# Setup one or more existing machines via SSH
+osmedeus cloud setup 1.2.3.4
+osmedeus cloud setup 1.2.3.4 5.6.7.8 9.10.11.12
+
+# With Ansible playbooks instead of SSH commands
+osmedeus cloud setup 1.2.3.4 --ansible
+
+# Verbose output for debugging
+osmedeus cloud setup 1.2.3.4 --verbose-setup
+```
+
+Uses SSH credentials from `cloud-settings.yaml`. Runs `setup.commands` and `post-commands` with template variable expansion (`{{public_ip}}`, `{{worker_name}}`, etc.). Checks SSH port availability before starting setup.
 
 ### Asset Query Commands
 

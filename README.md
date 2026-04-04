@@ -71,6 +71,11 @@ osmedeus assets -w example.com                          # List assets for worksp
 osmedeus assets --stats                                 # Show unique technologies, sources, types
 osmedeus assets --source httpx --type web --json        # Filter and output as JSON
 
+# Query vulnerabilities, runs, and steps
+osmedeus query vulns --severity high --workspace example.com
+osmedeus query runs --status running
+osmedeus query steps --run <run-uuid>
+
 # Query database tables
 osmedeus db list --table runs
 osmedeus db list --table event_logs --search "nuclei"
@@ -103,6 +108,12 @@ osmedeus worker eval -e 'ssh_exec("host", "whoami")'  # Eval with distributed ho
 osmedeus agent "analyze this codebase"
 osmedeus agent --agent codex "explain main.go"
 osmedeus agent --list
+
+# Cloud infrastructure management
+osmedeus cloud create --instances 3                    # Provision cloud machines
+osmedeus cloud setup 1.2.3.4 5.6.7.8                  # Setup existing machines
+osmedeus cloud list                                    # List active infrastructure
+osmedeus cloud run -f general -t example.com --instances 3
 
 # Show all usage examples
 osmedeus --usage-example
