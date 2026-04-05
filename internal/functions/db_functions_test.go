@@ -1356,3 +1356,195 @@ func TestDbImportCustomAsset_ContentDiscovery(t *testing.T) {
 	assert.Contains(t, asset6.Remarks, "Modern-App")
 	assert.Contains(t, asset6.Remarks, "SGW")
 }
+
+// --- Vigolium Envelope Import Tests ---
+
+func TestDbImportCustomAsset_VigoliumEnvelope(t *testing.T) {
+	cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// Create a small envelope JSONL with mixed record types
+	content := `{"type":"scan","data":{"uuid":"abc","status":"completed","target":"http://example.com"}}
+{"type":"module","data":{"id":"xss-light","name":"XSS Light","enabled":true}}
+{"type":"http_record","data":{"url":"http://example.com/","method":"GET","status_code":200,"scheme":"http","hostname":"example.com","port":80,"ip":"93.184.216.34","response_content_type":"text/html","response_content_length":1256,"response_words":45,"response_title":"Example Domain","source":"scanner"}}
+{"type":"http_record","data":{"url":"http://example.com/login","method":"POST","status_code":302,"scheme":"http","hostname":"example.com","port":80,"ip":"93.184.216.34","response_content_type":"text/html","response_content_length":0,"response_words":0,"source":"spidering"}}
+{"type":"module","data":{"id":"sqli-basic","name":"SQLi Basic","enabled":true}}`
+
+	testFile := filepath.Join(t.TempDir(), "vigolium-envelope.jsonl")
+	err := os.WriteFile(testFile, []byte(content), 0644)
+	require.NoError(t, err)
+
+	registry := NewRegistry()
+	result, err := registry.Execute(
+		`db_import_custom_asset("test-workspace", "`+testFile+`")`,
+		map[string]interface{}{},
+	)
+	require.NoError(t, err)
+
+	stats, ok := result.(map[string]interface{})
+	require.True(t, ok, "result should be a map")
+	// Only 2 http_record lines should be imported; scan and module lines skipped
+	assert.Equal(t, 2, stats["new"])
+	assert.Equal(t, 2, stats["total"])
+	assert.Equal(t, 0, stats["errors"])
+
+	ctx := context.Background()
+	db := database.GetDB()
+	require.NotNil(t, db)
+
+	// Verify field remapping for first http_record
+	var asset1 database.Asset
+	err = db.NewSelect().Model(&asset1).
+		Where("workspace = ?", "test-workspace").
+		Where("url = ?", "http://example.com/").
+		Scan(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "http://example.com/", asset1.AssetValue) // url -> asset_value fallback
+	assert.Equal(t, "GET", asset1.Method)
+	assert.Equal(t, 200, asset1.StatusCode)
+	assert.Equal(t, "http", asset1.Scheme)
+	assert.Equal(t, "93.184.216.34", asset1.HostIP)             // ip -> host_ip
+	assert.Equal(t, "text/html", asset1.ContentType)             // response_content_type -> content_type
+	assert.Equal(t, int64(1256), asset1.ContentLength)           // response_content_length -> content_length
+	assert.Equal(t, 45, asset1.Words)                            // response_words -> words
+	assert.Equal(t, "Example Domain", asset1.Title)              // response_title -> title
+	assert.Equal(t, "example.com", asset1.Input)                 // hostname -> input
+	assert.Equal(t, "scanner", asset1.Source)                    // source preserved
+	assert.Equal(t, "web", asset1.AssetType)                     // default for http_record
+
+	// Verify second http_record
+	var asset2 database.Asset
+	err = db.NewSelect().Model(&asset2).
+		Where("workspace = ?", "test-workspace").
+		Where("url = ?", "http://example.com/login").
+		Scan(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "POST", asset2.Method)
+	assert.Equal(t, 302, asset2.StatusCode)
+	assert.Equal(t, "spidering", asset2.Source)
+	assert.Equal(t, "web", asset2.AssetType)
+
+	// raw_json_data should be populated
+	assert.NotEmpty(t, asset1.RawJsonData)
+}
+
+func TestDbImportCustomAsset_VigoliumDiscover(t *testing.T) {
+	cleanup := setupTestDB(t)
+	defer cleanup()
+
+	registry := NewRegistry()
+
+	testFile := "../../test/testdata/sample-jsonl-output/vigolium-discover.jsonl"
+	_, err := os.Stat(testFile)
+	require.NoError(t, err, "sample vigolium-discover.jsonl file must exist")
+
+	result, err := registry.Execute(
+		`db_import_custom_asset("test-workspace", "`+testFile+`")`,
+		map[string]interface{}{},
+	)
+	require.NoError(t, err)
+
+	stats, ok := result.(map[string]interface{})
+	require.True(t, ok, "result should be a map")
+	// 28 http_record lines; scan and module lines should be skipped
+	assert.Equal(t, 28, stats["new"])
+	assert.Equal(t, 28, stats["total"])
+	assert.Equal(t, 0, stats["errors"])
+
+	ctx := context.Background()
+	db := database.GetDB()
+	require.NotNil(t, db)
+
+	// Verify a known record: the root URL request
+	var asset database.Asset
+	err = db.NewSelect().Model(&asset).
+		Where("workspace = ?", "test-workspace").
+		Where("url = ?", "http://localhost:3000/").
+		Scan(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "GET", asset.Method)
+	assert.Equal(t, 200, asset.StatusCode)
+	assert.Equal(t, "http", asset.Scheme)
+	assert.Equal(t, "web", asset.AssetType)
+	assert.Equal(t, "text/html; charset=UTF-8", asset.ContentType)
+	assert.Equal(t, "::1", asset.HostIP)
+	assert.Equal(t, "localhost", asset.Input)
+}
+
+func TestDbImportCustomAsset_VigoliumSpider(t *testing.T) {
+	cleanup := setupTestDB(t)
+	defer cleanup()
+
+	registry := NewRegistry()
+
+	testFile := "../../test/testdata/sample-jsonl-output/vigolium-spider.jsonl"
+	_, err := os.Stat(testFile)
+	require.NoError(t, err, "sample vigolium-spider.jsonl file must exist")
+
+	result, err := registry.Execute(
+		`db_import_custom_asset("test-workspace", "`+testFile+`")`,
+		map[string]interface{}{},
+	)
+	require.NoError(t, err)
+
+	stats, ok := result.(map[string]interface{})
+	require.True(t, ok, "result should be a map")
+	// 30 http_record lines; scan and module lines should be skipped
+	assert.Equal(t, 30, stats["new"])
+	assert.Equal(t, 30, stats["total"])
+	assert.Equal(t, 0, stats["errors"])
+
+	ctx := context.Background()
+	db := database.GetDB()
+	require.NotNil(t, db)
+
+	// Verify a known record from spider output
+	var asset database.Asset
+	err = db.NewSelect().Model(&asset).
+		Where("workspace = ?", "test-workspace").
+		Where("url = ?", "https://ginandjuice.shop/catalog/product/stock").
+		Scan(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "POST", asset.Method)
+	assert.Equal(t, 400, asset.StatusCode)
+	assert.Equal(t, "https", asset.Scheme)
+	assert.Equal(t, "web", asset.AssetType)
+	assert.Equal(t, "34.246.169.176", asset.HostIP)
+	assert.Equal(t, "ginandjuice.shop", asset.Input)
+	assert.Equal(t, "spidering", asset.Source)
+}
+
+func TestDbImportCustomAsset_VigoliumWithSourceOverride(t *testing.T) {
+	cleanup := setupTestDB(t)
+	defer cleanup()
+
+	// Envelope with no source field — should use the default from function arg
+	content := `{"type":"http_record","data":{"url":"http://test.com/api","method":"GET","status_code":200,"scheme":"http","hostname":"test.com","ip":"1.2.3.4"}}`
+
+	testFile := filepath.Join(t.TempDir(), "vigolium-no-source.jsonl")
+	err := os.WriteFile(testFile, []byte(content), 0644)
+	require.NoError(t, err)
+
+	registry := NewRegistry()
+	result, err := registry.Execute(
+		`db_import_custom_asset("test-workspace", "`+testFile+`", "web", "vigolium")`,
+		map[string]interface{}{},
+	)
+	require.NoError(t, err)
+
+	stats := result.(map[string]interface{})
+	assert.Equal(t, 1, stats["new"])
+
+	ctx := context.Background()
+	db := database.GetDB()
+	var asset database.Asset
+	err = db.NewSelect().Model(&asset).
+		Where("workspace = ?", "test-workspace").
+		Where("url = ?", "http://test.com/api").
+		Scan(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "vigolium", asset.Source)  // default source from arg
+	assert.Equal(t, "web", asset.AssetType)    // from envelope default, matches arg too
+	assert.Equal(t, "1.2.3.4", asset.HostIP)   // ip -> host_ip remapped
+	assert.Equal(t, "test.com", asset.Input)    // hostname -> input remapped
+}

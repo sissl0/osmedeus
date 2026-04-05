@@ -171,6 +171,61 @@ func (vf *vmFunc) updateRunField(ctx context.Context, id, field string, value go
 // unmarshalAssetJSON unmarshals JSON into an Asset with backward compatibility.
 // Handles old format where "remarks" is a string instead of []string,
 // and merges legacy "tags" array into Remarks.
+// unwrapEnvelopeJSON detects the {"type":"...","data":{...}} envelope format
+// used by tools like vigolium. Returns (extracted JSON bytes, should-skip).
+// If the line is an envelope with a non-importable type (e.g. "scan", "module"),
+// skip=true is returned. If it's an importable envelope (e.g. "http_record"),
+// the inner data is extracted and field names are remapped to match Asset json tags.
+// If the line is not an envelope, returns (nil, false) so the caller uses the original.
+func unwrapEnvelopeJSON(raw []byte) (extracted []byte, skip bool) {
+	var envelope struct {
+		Type string          `json:"type"`
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil || envelope.Type == "" || len(envelope.Data) == 0 {
+		return nil, false // not an envelope
+	}
+
+	// Only import http_record types; skip metadata like scan, module
+	if envelope.Type != "http_record" {
+		return nil, true
+	}
+
+	// Remap vigolium field names to Asset json tags
+	var data map[string]interface{}
+	if err := json.Unmarshal(envelope.Data, &data); err != nil {
+		return nil, false
+	}
+
+	fieldRemap := map[string]string{
+		"response_content_type":   "content_type",
+		"response_content_length": "content_length",
+		"response_words":          "words",
+		"response_title":          "title",
+		"ip":                      "host_ip",
+		"hostname":                "input",
+	}
+	for oldKey, newKey := range fieldRemap {
+		if val, ok := data[oldKey]; ok {
+			if _, exists := data[newKey]; !exists {
+				data[newKey] = val
+			}
+			delete(data, oldKey)
+		}
+	}
+
+	// Default asset_type to "web" for http_record
+	if _, ok := data["asset_type"]; !ok {
+		data["asset_type"] = "web"
+	}
+
+	result, err := json.Marshal(data)
+	if err != nil {
+		return nil, false
+	}
+	return result, false
+}
+
 func unmarshalAssetJSON(rawJSON []byte, asset *database.Asset) error {
 	// First try direct unmarshal
 	if err := json.Unmarshal(rawJSON, asset); err != nil {
@@ -2510,11 +2565,25 @@ func (vf *vmFunc) dbImportCustomAsset(call goja.FunctionCall) goja.Value {
 			continue
 		}
 
+		// Detect envelope format: {"type":"...","data":{...}}
+		// Used by tools like vigolium that wrap records in a typed envelope.
+		assetJSON := []byte(line)
+		if extracted, skip := unwrapEnvelopeJSON(assetJSON); skip {
+			continue // non-asset record type (e.g. "scan", "module")
+		} else if extracted != nil {
+			assetJSON = extracted
+		}
+
 		var asset database.Asset
-		if err := unmarshalAssetJSON([]byte(line), &asset); err != nil {
+		if err := unmarshalAssetJSON(assetJSON, &asset); err != nil {
 			logger.Get().Debug("skipping invalid JSON line", zap.Error(err))
 			stats.Errors++
 			continue
+		}
+
+		// Store original line as raw_json_data when not already set
+		if asset.RawJsonData == "" {
+			asset.RawJsonData = string(assetJSON)
 		}
 
 		// Force workspace from function argument
