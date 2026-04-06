@@ -169,5 +169,25 @@ func ensurePulumiInstalled() error {
 		}
 	}
 
-	return fmt.Errorf("pulumi CLI not found - install via: curl -fsSL https://get.pulumi.com | sh")
+	// Auto-install Pulumi CLI
+	fmt.Println("  ▷ Pulumi CLI not found, installing automatically...")
+	installCmd := exec.Command("bash", "-c", "curl -fsSL https://get.pulumi.com | sh")
+	installCmd.Stdout = os.Stdout
+	installCmd.Stderr = os.Stderr
+	if err := installCmd.Run(); err != nil {
+		return fmt.Errorf("failed to install pulumi CLI: %w", err)
+	}
+
+	// Add the installed pulumi to PATH
+	pulumiPath := filepath.Join(os.Getenv("HOME"), ".pulumi", "bin", "pulumi")
+	if _, err := os.Stat(pulumiPath); err == nil {
+		currentPath := os.Getenv("PATH")
+		if err := os.Setenv("PATH", filepath.Dir(pulumiPath)+":"+currentPath); err != nil {
+			return fmt.Errorf("failed to set PATH: %w", err)
+		}
+		fmt.Println("  ✓ Pulumi CLI installed successfully")
+		return nil
+	}
+
+	return fmt.Errorf("pulumi CLI installation completed but binary not found at %s", pulumiPath)
 }

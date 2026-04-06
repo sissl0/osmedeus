@@ -143,10 +143,10 @@ func (p *SSHPool) Get(ctx context.Context, config *core.RunnerConfig) (*ssh.Clie
 	addr := fmt.Sprintf("%s:%d", config.Host, port)
 	var client *ssh.Client
 	err = retry.Do(ctx, retry.Config{
-		MaxAttempts:  3,
-		InitialDelay: 500 * time.Millisecond,
-		MaxDelay:     5 * time.Second,
-		Multiplier:   2.0,
+		MaxAttempts:  5,
+		InitialDelay: 10 * time.Second,
+		MaxDelay:     10 * time.Second,
+		Multiplier:   1.0,
 	}, func() error {
 		var dialErr error
 		client, dialErr = ssh.Dial("tcp", addr, sshConfig)
