@@ -7,7 +7,8 @@
     "package-manager": "<auto_detect_package_manager>",
     "tags": [
       "utility",
-      "build"
+      "build",
+      "optional"
     ],
     "valide-command": "",
     "command-linux": {
@@ -632,7 +633,8 @@
       "dns",
       "resolver",
       "recon",
-      "bulk"
+      "bulk",
+      "optional"
     ],
     "valide-command": "massdns",
     "multi-commands-linux": [
