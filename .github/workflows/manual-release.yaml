@@ -44,10 +44,12 @@ jobs:
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean --skip=validate
+          args: release --clean --skip=validate --parallelism=1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GORELEASER_CURRENT_TAG: ${{ steps.get-tag.outputs.tag }}
+          GOGC: "50"
+          GOMEMLIMIT: "5GiB"
 
       - name: Mark release as latest
         env:
