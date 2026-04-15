@@ -3,16 +3,14 @@ version: 2
 
 project_name: osmedeus
 
-before:
-  hooks:
-    - go mod tidy
-
 builds:
   - id: osmedeus
     main: ./cmd/osmedeus
     binary: osmedeus
     env:
       - CGO_ENABLED=0
+    flags:
+      - -trimpath
     goos:
       - linux
       - darwin
