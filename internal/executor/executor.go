@@ -1135,7 +1135,24 @@ func (e *Executor) ExecuteModule(ctx context.Context, module *core.Workflow, par
 		Steps:        make([]*core.StepResult, 0),
 		Exports:      make(map[string]interface{}),
 	}
-
+	
+	// Always emit a workflow_* webhook on every return path (success, failure, cancel, skip, panic).
+    defer func() {
+        if result == nil {
+            return
+        }
+        if result.EndTime.IsZero() {
+            result.EndTime = time.Now()
+        }
+        notify.TriggerWebhooks(cfg, "workflow_"+string(result.Status), map[string]interface{}{
+            "workflow": module.Name,
+            "kind":     string(core.KindModule),
+            "target":   execCtx.Target,
+            "status":   string(result.Status),
+            "duration": result.EndTime.Sub(result.StartTime).Seconds(),
+        })
+    }()
+	
 	// Record workflow start for metrics
 	metrics.RecordWorkflowStart()
 
@@ -1420,15 +1437,6 @@ func (e *Executor) ExecuteModule(ctx context.Context, module *core.Workflow, par
 
 	// Record workflow completion metrics
 	metrics.RecordWorkflowEnd(module.Name, string(core.KindModule), string(result.Status), result.EndTime.Sub(result.StartTime).Seconds())
-
-	// Send webhook notification on completion
-	notify.TriggerWebhooks(cfg, "workflow_"+string(result.Status), map[string]interface{}{
-		"workflow": module.Name,
-		"kind":     string(core.KindModule),
-		"target":   execCtx.Target,
-		"status":   string(result.Status),
-		"duration": result.EndTime.Sub(result.StartTime).Seconds(),
-	})
 
 	// Export state on module completion
 	if stateFile, ok := execCtx.GetVariable("StateFile"); ok {
@@ -1851,6 +1859,23 @@ func (e *Executor) ExecuteFlow(ctx context.Context, flow *core.Workflow, params 
 		Exports:      make(map[string]interface{}),
 	}
 
+	// Always emit a workflow_* webhook on every return path (success, failure, cancel, skip, panic).
+    defer func() {
+        if result == nil {
+            return
+        }
+        if result.EndTime.IsZero() {
+            result.EndTime = time.Now()
+        }
+        notify.TriggerWebhooks(cfg, "workflow_"+string(result.Status), map[string]interface{}{
+            "workflow": module.Name,
+            "kind":     string(core.KindFlow),
+            "target":   execCtx.Target,
+            "status":   string(result.Status),
+            "duration": result.EndTime.Sub(result.StartTime).Seconds(),
+        })
+    }()
+
 	// Record workflow start for metrics
 	metrics.RecordWorkflowStart()
 
@@ -2260,15 +2285,6 @@ func (e *Executor) ExecuteFlow(ctx context.Context, flow *core.Workflow, params 
 
 	// Record workflow completion metrics
 	metrics.RecordWorkflowEnd(flow.Name, string(core.KindFlow), string(result.Status), result.EndTime.Sub(result.StartTime).Seconds())
-
-	// Send webhook notification on flow completion
-	notify.TriggerWebhooks(cfg, "workflow_"+string(result.Status), map[string]interface{}{
-		"workflow": flow.Name,
-		"kind":     string(core.KindFlow),
-		"target":   execCtx.Target,
-		"status":   string(result.Status),
-		"duration": result.EndTime.Sub(result.StartTime).Seconds(),
-	})
 
 	// Export state on flow completion
 	if stateFile, ok := execCtx.GetVariable("StateFile"); ok {
