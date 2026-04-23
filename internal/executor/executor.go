@@ -1144,6 +1144,10 @@ func (e *Executor) ExecuteModule(ctx context.Context, module *core.Workflow, par
 		if result.EndTime.IsZero() {
 			result.EndTime = time.Now()
 		}
+		errMsg := ""
+		if result.Error != nil {
+			errMsg = result.Error.Error()
+		}
 		notify.TriggerWebhooks(cfg, "workflow_"+string(result.Status), map[string]interface{}{
 			"workflow":  module.Name,
 			"kind":      result.WorkflowKind,
@@ -1151,7 +1155,7 @@ func (e *Executor) ExecuteModule(ctx context.Context, module *core.Workflow, par
 			"status":    string(result.Status),
 			"duration":  result.EndTime.Sub(result.StartTime).Seconds(),
 			"run_uuid":  result.RunUUID,
-			"error":     result.Error.Error(),
+			"error":     errMsg,
 			"artifacts": result.Artifacts,
 			"message":   result.Message,
 		})
@@ -1871,6 +1875,10 @@ func (e *Executor) ExecuteFlow(ctx context.Context, flow *core.Workflow, params 
 		if result.EndTime.IsZero() {
 			result.EndTime = time.Now()
 		}
+		errMsg := ""
+		if result.Error != nil {
+			errMsg = result.Error.Error()
+		}
 		notify.TriggerWebhooks(cfg, "workflow_"+string(result.Status), map[string]interface{}{
 			"workflow":  result.WorkflowName,
 			"kind":      result.WorkflowKind,
@@ -1878,7 +1886,7 @@ func (e *Executor) ExecuteFlow(ctx context.Context, flow *core.Workflow, params 
 			"status":    string(result.Status),
 			"duration":  result.EndTime.Sub(result.StartTime).Seconds(),
 			"run_uuid":  result.RunUUID,
-			"error":     result.Error.Error(),
+			"error":     errMsg,
 			"artifacts": result.Artifacts,
 			"message":   result.Message,
 		})
