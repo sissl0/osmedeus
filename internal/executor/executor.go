@@ -1151,9 +1151,6 @@ func (e *Executor) ExecuteModule(ctx context.Context, module *core.Workflow, par
 			"status":   string(result.Status),
 			"duration": result.EndTime.Sub(result.StartTime).Seconds(),
 			"run_uuid": result.RunUUID,
-			"error":    result.Error,
-			"steps":    result.Steps,
-			"exports":  result.Exports,
 		})
 	}()
 
@@ -1878,9 +1875,6 @@ func (e *Executor) ExecuteFlow(ctx context.Context, flow *core.Workflow, params 
 			"status":   string(result.Status),
 			"duration": result.EndTime.Sub(result.StartTime).Seconds(),
 			"run_uuid": result.RunUUID,
-			"error":    result.Error,
-			"steps":    result.Steps,
-			"exports":  result.Exports,
 		})
 	}()
 
