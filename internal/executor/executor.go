@@ -1145,12 +1145,15 @@ func (e *Executor) ExecuteModule(ctx context.Context, module *core.Workflow, par
 			result.EndTime = time.Now()
 		}
 		notify.TriggerWebhooks(cfg, "workflow_"+string(result.Status), map[string]interface{}{
-			"workflow": module.Name,
-			"kind":     string(core.KindModule),
-			"target":   execCtx.Target,
-			"status":   string(result.Status),
-			"duration": result.EndTime.Sub(result.StartTime).Seconds(),
-			"run_uuid": result.RunUUID,
+			"workflow":  module.Name,
+			"kind":      result.WorkflowKind,
+			"target":    execCtx.Target,
+			"status":    string(result.Status),
+			"duration":  result.EndTime.Sub(result.StartTime).Seconds(),
+			"run_uuid":  result.RunUUID,
+			"error":     result.Error.Error(),
+			"artifacts": result.Artifacts,
+			"message":   result.Message,
 		})
 	}()
 
@@ -1869,12 +1872,15 @@ func (e *Executor) ExecuteFlow(ctx context.Context, flow *core.Workflow, params 
 			result.EndTime = time.Now()
 		}
 		notify.TriggerWebhooks(cfg, "workflow_"+string(result.Status), map[string]interface{}{
-			"workflow": flow.Name,
-			"kind":     string(core.KindFlow),
-			"target":   execCtx.Target,
-			"status":   string(result.Status),
-			"duration": result.EndTime.Sub(result.StartTime).Seconds(),
-			"run_uuid": result.RunUUID,
+			"workflow":  result.WorkflowName,
+			"kind":      result.WorkflowKind,
+			"target":    execCtx.Target,
+			"status":    string(result.Status),
+			"duration":  result.EndTime.Sub(result.StartTime).Seconds(),
+			"run_uuid":  result.RunUUID,
+			"error":     result.Error.Error(),
+			"artifacts": result.Artifacts,
+			"message":   result.Message,
 		})
 	}()
 
