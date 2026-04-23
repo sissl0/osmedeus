@@ -1466,9 +1466,11 @@ func (e *Executor) ExecuteModule(ctx context.Context, module *core.Workflow, par
 
 	// Register artifacts (reports from workflow + state files)
 	if !e.dryRun {
-		if err := RegisterArtifacts(module, execCtx, e.dbRunID, execCtx.Logger); err != nil {
+		paths, err := RegisterArtifacts(module, execCtx, e.dbRunID, execCtx.Logger)
+		if err != nil {
 			execCtx.Logger.Warn("Failed to register artifacts", zap.Error(err))
 		}
+		result.Artifacts = paths
 	}
 
 	// Flush write coordinator at workflow completion
@@ -2322,9 +2324,11 @@ func (e *Executor) ExecuteFlow(ctx context.Context, flow *core.Workflow, params 
 
 	// Register artifacts (reports from workflow + state files)
 	if !e.dryRun {
-		if err := RegisterArtifacts(flow, execCtx, e.dbRunID, execCtx.Logger); err != nil {
+		paths, err := RegisterArtifacts(flow, execCtx, e.dbRunID, execCtx.Logger)
+		if err != nil {
 			execCtx.Logger.Warn("Failed to register artifacts", zap.Error(err))
 		}
+		result.Artifacts = paths
 	}
 
 	// Flush write coordinator at workflow completion
