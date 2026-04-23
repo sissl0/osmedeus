@@ -3134,13 +3134,6 @@ func (e *Executor) executeDecisionCondition(ctx context.Context, dc *core.Decisi
 
 // handleModuleAction handles a module action (for flow execution)
 func (e *Executor) handleModuleAction(action core.Action, execCtx *core.ExecutionContext) {
-	// Check condition if present
-	if action.Condition != "" {
-		ok, err := e.functionRegistry.EvaluateCondition(action.Condition, execCtx.GetVariables())
-		if err != nil || !ok {
-			return
-		}
-	}
 
 	// Check condition if present
 	if action.Condition != "" {
